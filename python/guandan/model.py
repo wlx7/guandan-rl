@@ -119,6 +119,12 @@ def save_checkpoint(path, model: GuandanNet, meta: dict | None = None, optimizer
         obj["optimizer"] = optimizer.state_dict()
     tmp = path + ".tmp"
     torch.save(obj, tmp)
+    for attempt in range(50):  # Windows: the target may be open in another process for a moment
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            time.sleep(0.2)
     os.replace(tmp, path)
 
 
