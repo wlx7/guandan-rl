@@ -21,6 +21,15 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 app = FastAPI(title="Guandan RL", version=__version__)
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
+
+@app.middleware("http")
+async def no_stale_ui(request, call_next):
+    # always revalidate the web UI so that an upgrade is picked up without a hard refresh
+    resp = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 STATE = {"room": None, "port": 8000}
 
 
