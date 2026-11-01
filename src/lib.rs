@@ -5,6 +5,7 @@ pub mod cards;
 pub mod features;
 pub mod game;
 pub mod moves;
+pub mod search;
 pub mod venv;
 
 #[cfg(feature = "python")]

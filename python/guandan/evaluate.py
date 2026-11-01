@@ -90,6 +90,7 @@ def main():
     ap.add_argument("--rounds", type=int, default=1000)
     ap.add_argument("--envs", type=int, default=64)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--search", default="", help="evaluate with search, e.g. 5,12,14 = top_k,samples,depth")
     args = ap.parse_args()
     torch.set_grad_enabled(False)
     m, _ = load_checkpoint(args.model, args.device)
@@ -99,6 +100,15 @@ def main():
     else:
         mb, _ = load_checkpoint(args.opponent, args.device)
         b = BatchPolicy(mb, args.device)
+    if args.search:
+        from .search import SearchAgent, evaluate_search
+        k, n, d = (int(x) for x in args.search.split(","))
+        ag = SearchAgent(m, args.device, top_k=k, samples=n, depth=d)
+        r = evaluate_search(ag, b, rounds=args.rounds, envs=min(args.envs, 16),
+                            log=lambda t: print(t, flush=True))
+        print(f"search({args.search}) vs {args.opponent}: win {r['win_rate']*100:.1f}%  score {r['score']:+.3f}  "
+              f"({r['rounds']} rounds, {r['seconds']:.0f}s)")
+        return
     r = evaluate(a, b, rounds=args.rounds, envs=args.envs)
     print(f"vs {args.opponent}: win {r['win_rate']*100:.1f}%  score {r['score']:+.3f}  "
           f"double {r['double_rate']*100:.1f}%  ({r['rounds']} rounds, {r['seconds']:.1f}s)")

@@ -14,6 +14,7 @@ from .. import __version__
 from ..paths import list_models, resolve_model, default_model, home
 from . import trainer
 from ..proc import resource_limits
+from ..scoring import PRESETS as scoring_presets
 from .room import Room
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
@@ -31,6 +32,12 @@ async def no_stale_ui(request, call_next):
     return resp
 
 STATE = {"room": None, "port": 8000}
+
+try:  # keep the battle server light: training (if any) needs the cores
+    import torch as _torch
+    _torch.set_num_threads(max(1, min(4, (os.cpu_count() or 2) // 4)))
+except Exception:
+    pass
 
 
 def lan_ips():
@@ -91,6 +98,7 @@ def api_info():
         "default_model": default_model(),
         "cpu_count": os.cpu_count(),
         "limits": {"cuda": resource_limits("cuda"), "cpu": resource_limits("cpu")},
+        "scoring": {k: v for k, v in scoring_presets.items() if v},
         "active_runs": trainer.active_runs(),
     }
 
@@ -193,7 +201,9 @@ def api_room_create(body: dict):
         old.close()
     room = Room(mode, seats, hint_model=model_default, timeout=int(body.get("timeout", 20)),
                 ai_speed=float(body.get("ai_speed", 1.0)),
-                length="quick" if body.get("length") == "quick" else "full")
+                length="quick" if body.get("length") == "quick" else "full",
+                think="fast" if body.get("think") == "fast" else "deep",
+                scoring_name=body.get("scoring") or "none")
     STATE["room"] = room
     token = None
     seat = None

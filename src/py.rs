@@ -6,6 +6,7 @@ use crate::cards::*;
 use crate::features::*;
 use crate::game::*;
 use crate::moves::*;
+use crate::search::Rollouts;
 use crate::venv::VecEnv;
 
 type PyMove = (u8, u8, Vec<u8>);
@@ -86,6 +87,11 @@ impl PyVecEnv {
         (n, PyBytes::new(py, &s), PyBytes::new(py, &h), PyBytes::new(py, &a), PyBytes::new(py, &f32_bytes(&t)))
     }
 
+    /// A copy of the game running in environment `i`.
+    fn game(&self, i: usize) -> PyGame {
+        PyGame { g: self.inner.games[i].clone() }
+    }
+
     fn levels(&self, i: usize) -> (u8, [u8; 2], i8) {
         let g = &self.inner.games[i];
         (g.level, g.team_level, g.banker)
@@ -108,6 +114,32 @@ impl PyGame {
 
     fn copy(&self) -> Self {
         self.clone()
+    }
+
+    /// Copy with the hidden hands re-sampled from the point of view of `me` (default: current player).
+    #[pyo3(signature = (seed, me = None))]
+    fn determinize(&self, seed: u64, me: Option<u8>) -> Self {
+        let mut rng = Rng::new(seed);
+        let me = me.unwrap_or(self.g.current);
+        PyGame { g: self.g.determinize(me, &mut rng) }
+    }
+
+    fn round_reward(&self, team: u8) -> f32 {
+        self.g.round_reward(team)
+    }
+
+    /// Bombs played this round: [4-5 cards, 6+ cards, straight flush, joker bomb].
+    #[getter]
+    fn bombs(&self) -> [u8; 4] {
+        self.g.bombs
+    }
+
+    fn multiplier(&self, doubles: [bool; 4], cap: u32) -> u32 {
+        ScoreRules { doubles, cap }.multiplier(&self.g.bombs)
+    }
+
+    fn round_score(&self, team: u8, doubles: [bool; 4], cap: u32) -> f32 {
+        self.g.round_score(team, &ScoreRules { doubles, cap })
     }
 
     #[getter]
@@ -254,6 +286,49 @@ impl PyGame {
     }
 }
 
+#[pyclass(name = "Rollouts", module = "guandan._core")]
+pub struct PyRollouts {
+    inner: Rollouts,
+}
+
+#[pymethods]
+impl PyRollouts {
+    #[new]
+    fn new(games: Vec<PyRef<PyGame>>) -> Self {
+        PyRollouts { inner: Rollouts::new(games.iter().map(|g| g.g.clone()).collect()) }
+    }
+
+    /// (indices, players, states, hists, actions, offsets) of unfinished games.
+    fn observe<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> (Vec<u32>, Bound<'py, PyBytes>, Bound<'py, PyBytes>, Bound<'py, PyBytes>, Bound<'py, PyBytes>, Vec<u32>) {
+        let (i, p, s, h, a, o) = self.inner.observe();
+        (i, PyBytes::new(py, &p), PyBytes::new(py, &s), PyBytes::new(py, &h), PyBytes::new(py, &a), o)
+    }
+
+    fn step(&mut self, choices: Vec<u32>) {
+        self.inner.step(&choices);
+    }
+
+    fn rewards(&self, team: u8) -> Vec<f32> {
+        self.inner.rewards(team)
+    }
+
+    /// Scores under a multiplier system: doubles = [4-5 bomb, 6+ bomb, straight flush, joker bomb].
+    fn scores(&self, team: u8, doubles: [bool; 4], cap: u32) -> Vec<f32> {
+        self.inner.scores(team, &ScoreRules { doubles, cap })
+    }
+
+    fn multipliers(&self, doubles: [bool; 4], cap: u32) -> Vec<u32> {
+        self.inner.multipliers(&ScoreRules { doubles, cap })
+    }
+
+    fn done(&self) -> Vec<bool> {
+        self.inner.done.clone()
+    }
+}
+
 #[pyfunction]
 fn dims() -> (usize, usize, usize, usize) {
     (STATE_DIM, HIST_LEN, HIST_DIM, ACTION_DIM)
@@ -278,6 +353,7 @@ fn kind_name(k: u8) -> String {
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGame>()?;
     m.add_class::<PyVecEnv>()?;
+    m.add_class::<PyRollouts>()?;
     m.add_function(wrap_pyfunction!(dims, m)?)?;
     m.add_function(wrap_pyfunction!(classify_cards, m)?)?;
     m.add_function(wrap_pyfunction!(card_label, m)?)?;

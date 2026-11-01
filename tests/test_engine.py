@@ -115,3 +115,27 @@ def test_rule_bot_beats_random():
     from guandan.evaluate import evaluate
     r = evaluate("rule", "random", rounds=200, envs=32)
     assert r["win_rate"] > 0.8
+
+
+def test_determinize_and_rollouts():
+    g = _core.Game(11)
+    me = g.current
+    d = g.determinize(5)
+    assert sorted(d.hand(me)) == sorted(g.hand(me))
+    assert d.hand_counts() == g.hand_counts()
+    ro = _core.Rollouts([d.copy() for _ in range(4)])
+    rng = random.Random(0)
+    for _ in range(3000):
+        idx, players, s, h, a, off = ro.observe()
+        if not idx:
+            break
+        ro.step([rng.randrange(off[j + 1] - off[j]) for j in range(len(idx))])
+    assert all(ro.done())
+    sc = ro.scores(0, [True, True, True, True], 64)
+    assert all(abs(x) >= 1 for x in sc)
+
+
+def test_multiplier():
+    g = _core.Game(3)
+    assert g.multiplier([True, True, True, True], 16) == 1
+    assert list(g.bombs) == [0, 0, 0, 0]

@@ -63,7 +63,7 @@ async function viewHome() {
 
 // ---------------------------------------------------------------- setup
 async function viewSetup() {
-  const cfg = { mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
+  const cfg = { think: 'deep', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
   let models = [];
   let room = null;
   try { [models, room] = await Promise.all([api.get('/api/models'), api.get('/api/room')]); } catch (e) { toast(e.message, 'err'); }
@@ -123,6 +123,20 @@ async function viewSetup() {
               choice(cfg.length === 'quick', '快速对局', '每局随机抽一个级牌，单局结算积分，不进贡。适合随时开打。', () => { cfg.length = 'quick'; render(); }),
               choice(cfg.length === 'full', '竞技模式', '从 2 打到 A：双上升三级、进贡还贡、抗贡、接风，过 A 才算赢。', () => { cfg.length = 'full'; render(); }),
             )),
+          h('div', { class: 'panel' }, h('h2', {}, '计分'),
+            h('div', { class: 'choice-row', style: { gridTemplateColumns: '1fr 1fr 1fr' } },
+              choice(cfg.scoring === 'none', '只算升级', '按升级数结算：双上 3、一三游 2、一四游 1。', () => { cfg.scoring = 'none'; render(); }),
+              choice(cfg.scoring === 'standard', '标准倍数', '底分同升级数；6 张以上炸弹、同花顺、天王炸每出一个翻一倍，封顶 16 倍。', () => { cfg.scoring = 'standard'; render(); }),
+              choice(cfg.scoring === 'all', '全炸翻倍', '每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 64 倍。', () => { cfg.scoring = 'all'; render(); }),
+            ),
+            cfg.scoring !== 'none' ? h('p', { class: 'dim', style: { fontSize: '12.5px', margin: '10px 0 0' } }, cfg.think === 'deep'
+              ? '深度思考的 AI 会把每一手推演到本局结束，按倍数算出的得分期望来出牌（例如何时值得炸、何时留着）。'
+              : '快速模式的 AI 只看神经网络，不会专门考虑倍数；想让 AI 按得分期望出牌请选“深度思考”。') : null),
+          h('div', { class: 'panel' }, h('h2', {}, 'AI 思考方式'),
+            h('div', { class: 'choice-row' },
+              choice(cfg.think === 'deep', '深度思考', '推荐。网络先挑出最好的几手，再在随机推测的对手手牌里各模拟打下去比较结果，更强，每步多想不到一秒。', () => { cfg.think = 'deep'; render(); }),
+              choice(cfg.think === 'fast', '快速', '只用神经网络直接出牌，几乎不用等待，水平稍弱。', () => { cfg.think = 'fast'; render(); }),
+            )),
           h('div', { class: 'panel' }, h('h2', {}, 'AI 与玩家'),
             h('div', { class: 'field' }, h('label', {}, 'AI 模型'), models.length ? modelSelect(cfg.model, (v) => { cfg.model = v; }) : h('div', { class: 'dim' }, '还没有模型：请先到训练中心训练，或下载 Release 中的模型。')),
             h('div', { class: 'grid2', style: { marginTop: '12px' } },
@@ -146,7 +160,7 @@ async function viewSetup() {
     nameStore.set(cfg.name);
     try {
       const body = {
-        mode: cfg.mode, length: cfg.length, model: cfg.model, ai_speed: cfg.ai_speed, name: cfg.name,
+        mode: cfg.mode, length: cfg.length, think: cfg.think, scoring: cfg.scoring, model: cfg.model, ai_speed: cfg.ai_speed, name: cfg.name,
         seats: cfg.seats.map((k, i) => ({ kind: k, model: cfg.seatModels[i] || cfg.model })),
       };
       const r = await api.post('/api/room/create', body);

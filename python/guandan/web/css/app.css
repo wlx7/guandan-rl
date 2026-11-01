@@ -232,6 +232,14 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .plaque .sub { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.8; margin-top: 2px; white-space: nowrap; }
 .plaque.pulse { animation: plaquepulse 1.2s ease-out 1; }
 @keyframes plaquepulse { 30% { transform: scale(1.12); } }
+.mult { display: grid; text-align: center; line-height: 1.05; padding: 3px 9px; border-radius: 8px; background: rgba(194, 55, 43, 0.22); border: 1px solid rgba(226, 90, 76, 0.55); }
+.mult span { font-size: 10px; color: #ffd9d3; }
+.mult b { font-family: var(--num); font-size: 18px; color: #fff3d6; }
+.mult.pulse { animation: plaquepulse 0.9s ease-out 1; }
+.scoreline { display: flex; justify-content: center; align-items: baseline; gap: 8px; font-size: 15px; color: var(--text-2); margin: 8px 0 4px; flex-wrap: wrap; }
+.scoreline .x { color: var(--text-3); }
+.scoreline b.neg { color: var(--cinnabar-hi); }
+.scoreline b { font-family: var(--num); font-size: 26px; color: var(--brass-hi); }
 .meta { font-size: 12px; color: var(--text-2); text-align: right; line-height: 1.35; min-width: 0; flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .meta b { color: var(--text); font-weight: 600; }
 

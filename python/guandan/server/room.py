@@ -9,6 +9,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import _core
+from .. import scoring
 from ..agents import GameAgent, random_move
 
 PHASE_RETURN, PHASE_PLAY, PHASE_ROUND_OVER, PHASE_MATCH_OVER = 0, 1, 2, 3
@@ -16,13 +17,23 @@ KIND_PASS, KIND_TRIBUTE = 0, 11
 BOMB_KINDS = (8, 9, 10)
 
 _executor = ThreadPoolExecutor(max_workers=2)
-_agents: dict[str, GameAgent] = {}
+_agents: dict[tuple, GameAgent] = {}
+
+# "deep": the network proposes candidates and search tests them in sampled worlds
+SEARCH_SETTINGS = {"top_k": 5, "samples": 12, "depth": 14}
 
 
-def get_agent(path: str) -> GameAgent:
-    if path not in _agents:
-        _agents[path] = GameAgent(path, "cpu")
-    return _agents[path]
+def get_agent(path: str, think: str = "deep", scoring_name: str = "none") -> GameAgent:
+    key = (path, think, scoring_name)
+    if key not in _agents:
+        search = None
+        if think == "deep":
+            search = dict(SEARCH_SETTINGS)
+            sc = scoring.get(scoring_name)
+            if sc:
+                search.update(samples=10, scoring={"doubles": sc["doubles"], "cap": sc["cap"]})
+        _agents[key] = GameAgent(path, "cpu", search=search)
+    return _agents[key]
 
 
 class Seat:
@@ -46,12 +57,16 @@ class Seat:
 
 class Room:
     def __init__(self, mode: str, seats: list[dict], hint_model: str | None, timeout: int = 20,
-                 ai_speed: float = 1.0, seed: int | None = None, length: str = "full"):
+                 ai_speed: float = 1.0, seed: int | None = None, length: str = "full", think: str = "deep",
+                 scoring_name: str = "none"):
         assert mode in ("teach", "real")
         assert length in ("quick", "full")
         self.id = secrets.token_hex(3)
         self.mode = mode
         self.length = length  # quick: random level, independent deals; full: play from 2 to A
+        self.think = "fast" if think == "fast" else "deep"
+        self.scoring = scoring_name if scoring.get(scoring_name) else "none"
+        self.totals = [0, 0]  # accumulated scores per team when a scoring system is used
         self.timeout = int(timeout)
         self.ai_speed = ai_speed
         self.hint_model = hint_model
@@ -122,6 +137,8 @@ class Room:
             "id": self.id,
             "mode": self.mode,
             "length": self.length,
+            "think": self.think,
+            "scoring": self.scoring,
             "status": self.status,
             "timeout": self.timeout,
             "seats": [{"index": s.index, "kind": s.kind, "name": s.name, "taken": s.taken,
@@ -167,6 +184,9 @@ class Room:
             "mode": self.mode,
             "length": self.length,
             "points": self.points,
+            "think": self.think,
+            "scoring": self.scoring,
+            "totals": self.totals,
             "status": self.status,
             "you": v,
             "phase": g.phase,
@@ -207,13 +227,17 @@ class Room:
         for p in visible:
             if p != v:
                 st["hands"][str(p)] = list(g.hand(p))
+        sc = scoring.get(self.scoring)
+        st["bombs"] = list(g.bombs)
+        st["multiplier"] = g.multiplier(sc["doubles"], sc["cap"]) if sc else 1
         if g.phase in (PHASE_ROUND_OVER, PHASE_MATCH_OVER):
             r = g.last_result()
             if r:
                 order, win_team, gain, match_over, before, after, a_reset = r
                 st["result"] = {"order": list(order), "win_team": win_team, "gain": gain,
                                 "match_over": match_over, "before": list(before), "after": list(after),
-                                "a_reset": a_reset}
+                                "a_reset": a_reset,
+                                "score": int(g.round_score(win_team, sc["doubles"], sc["cap"])) if sc else None}
         if self.review and v == self.review.get("seat"):
             st["review"] = self.review
         return st
@@ -255,9 +279,15 @@ class Room:
         if g.phase in (PHASE_ROUND_OVER, PHASE_MATCH_OVER):
             r = g.last_result()
             self.event["round_over"] = True
+            sc = scoring.get(self.scoring)
+            if r and sc:
+                v = int(g.round_score(r[1], sc["doubles"], sc["cap"]))
+                self.totals[r[1]] += v
+                self.totals[1 - r[1]] -= v
             if r and self.length == "quick":
-                self.points[r[1]] += r[2]
-                self.points[1 - r[1]] -= r[2]
+                gain = int(g.round_score(r[1], sc["doubles"], sc["cap"])) if sc else r[2]
+                self.points[r[1]] += gain
+                self.points[1 - r[1]] -= gain
             elif r and r[3]:
                 self.score[r[1]] += 1
             if r:
@@ -273,7 +303,7 @@ class Room:
         seat = self.seats[p]
         g = self.game.copy()
         try:
-            agent = get_agent(seat.model)
+            agent = get_agent(seat.model, self.think, self.scoring)
             return agent.choose(g)
         except Exception:
             traceback.print_exc()
@@ -282,7 +312,7 @@ class Room:
 
     def hints(self, k=5):
         g = self.game.copy()
-        agent = get_agent(self.hint_model)
+        agent = get_agent(self.hint_model, self.think, self.scoring)
         ev = agent.evaluate(g)
         out = []
         for (kind, key, cards), q in ev[:k]:
@@ -393,8 +423,11 @@ class Room:
                 seat = self.seats[p]
                 if seat.kind == "ai":
                     self.deadline = None
-                    await asyncio.sleep(self.ai_delay())
+                    t_think = time.time()
                     mv = await loop.run_in_executor(_executor, self.ai_move, p)
+                    rest = self.ai_delay() - (time.time() - t_think)
+                    if rest > 0:
+                        await asyncio.sleep(rest)
                     self._apply(p, mv)
                 else:
                     timed = self.mode == "real"
@@ -428,23 +461,27 @@ class Room:
     def make_review(self, p, mv):
         """Teaching mode: compare the human's move with the AI's preferred move."""
         g = self.game.copy()
-        ev = get_agent(self.hint_model).evaluate(g)
+        agent = get_agent(self.hint_model, self.think, self.scoring)
+        if agent.searcher is not None:
+            ev = agent.searcher.evaluate(g)  # (move, score, net_q, searched), levels
+        else:
+            ev = [(m, q * 3, q * 3, True) for m, q in agent.evaluate(g)]
         if len(ev) <= 1:
             return None
         kind, key, cards = mv[0], mv[1], sorted(mv[2])
-        chosen_q = None
-        rank = None
-        for i, (m, q) in enumerate(ev):
+        hit = None
+        for i, (m, sc, nq, searched) in enumerate(ev):
             if m[0] == kind and m[1] == key and len(m[2]) == len(cards):
-                if sorted(m[2]) == cards or chosen_q is None:
-                    chosen_q, rank = q, i + 1
+                if hit is None or sorted(m[2]) == cards:
+                    hit = (i + 1, sc if searched else nq, searched)
                     if sorted(m[2]) == cards:
                         break
-        best_m, best_q = ev[0]
-        return {"seat": p, "best": dict(self.move_info(*best_m), q=round(best_q * 3, 3)),
+        best_m, best_s = ev[0][0], ev[0][1]
+        return {"seat": p, "best": dict(self.move_info(*best_m), q=round(best_s, 3)),
                 "chosen": self.move_info(kind, key, cards),
-                "chosen_q": None if chosen_q is None else round(chosen_q * 3, 3),
-                "rank": rank, "total": len(ev)}
+                "chosen_q": None if hit is None else round(hit[1], 3),
+                "rank": None if hit is None else hit[0], "total": len(ev),
+                "searched": True if hit is None else hit[2]}
 
     async def handle(self, seat: int, ws, msg):
         act = msg.get("action")

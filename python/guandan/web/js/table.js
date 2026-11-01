@@ -160,19 +160,24 @@ export function mountTable(app) {
     const plaque = h('div', { class: 'plaque' + (prevLevel !== s.level ? ' pulse' : '') },
       h('div', { class: 'big' }, '打 ', h('span', { class: 'n' }, RANKS[s.level])),
       h('div', { class: 'sub' }, `红桃${RANKS[s.level]} 逢人配`));
+    const multBadge = s.scoring && s.scoring !== 'none'
+      ? h('div', { class: 'mult' + (S.prev && S.prev.multiplier !== s.multiplier && s.multiplier > 1 ? ' pulse' : ''), title: '本局倍数' }, h('span', {}, '倍数'), h('b', {}, `×${s.multiplier}`))
+      : null;
     if (s.length === 'quick') {
-      lvBox.replaceChildren(plaque);
+      lvBox.replaceChildren(...[plaque, multBadge].filter(Boolean));
     } else {
       lvBox.replaceChildren(
         h('div', { class: 'teamlv ours' + (s.banker === ot ? ' banker' : '') }, h('span', {}, '我方'), h('b', {}, lv(ot))),
         plaque,
-        h('div', { class: 'teamlv' + (s.banker === 1 - ot ? ' banker' : '') }, h('span', {}, '对方'), h('b', {}, lv(1 - ot))));
+        h('div', { class: 'teamlv' + (s.banker === 1 - ot ? ' banker' : '') }, h('span', {}, '对方'), h('b', {}, lv(1 - ot))),
+        ...(multBadge ? [multBadge] : []));
     }
     const modeName = s.mode === 'teach' ? '教学' : '实战';
+    const scored = s.scoring && s.scoring !== 'none';
     const line2 = s.length === 'quick'
       ? `积分 ${s.points[ot]} : ${s.points[1 - ot]}`
-      : `第 ${s.match_no} 场  胜场 ${s.score[ot]} : ${s.score[1 - ot]}`;
-    meta.replaceChildren(h('div', {}, h('b', {}, `${modeName}${s.length === 'quick' ? '快速' : '竞技'}`), `  第 ${s.round_no} 局`), h('div', {}, line2));
+      : `第 ${s.match_no} 场  胜场 ${s.score[ot]} : ${s.score[1 - ot]}` + (scored ? `  总分 ${s.totals[ot]} : ${s.totals[1 - ot]}` : '');
+    meta.replaceChildren(h('div', {}, h('b', {}, `${modeName}${s.length === 'quick' ? '快速' : '竞技'}`), `  第 ${s.round_no} 局`), h('div', {}, line2 + (s.think === 'fast' ? '  AI 快速' : '')));
   }
 
   function renderWaiting() {
@@ -463,7 +468,7 @@ export function mountTable(app) {
   function renderSide() {
     if (!S.hints || !myTurn()) { side.replaceChildren(); return; }
     const s = S.s;
-    const box = h('div', { class: 'hints' }, h('h3', {}, h('span', {}, 'AI 建议（期望升级数）'), h('button', { class: 'btn small', onclick: () => { S.hints = null; renderSide(); } }, '收起')));
+    const box = h('div', { class: 'hints' }, h('h3', {}, h('span', {}, S.s && S.s.think === 'deep' ? 'AI 建议（推演后的期望升级数）' : 'AI 建议（期望升级数）'), h('button', { class: 'btn small', onclick: () => { S.hints = null; renderSide(); } }, '收起')));
     S.hints.forEach((m, i) => {
       const v = Math.max(-3, Math.min(3, m.q));
       const w = Math.abs(v) / 3 * 50;
@@ -484,7 +489,9 @@ export function mountTable(app) {
     if (!rv || rv.rank == null) return;
     const node = rv.rank === 1
       ? h('span', {}, `AI 点评：与 AI 首选一致（共 ${rv.total} 种出法）`)
-      : h('span', {}, `AI 点评：你的出法在 ${rv.total} 种中排第 ${rv.rank}，期望 ${fmt(rv.chosen_q)}；AI 首选「${rv.best.desc}」期望 ${fmt(rv.best.q)}`);
+      : rv.searched === false
+        ? h('span', {}, `AI 点评：这一手不在 AI 重点推演的几手之内（网络估计 ${fmt(rv.chosen_q)}）；AI 首选「${rv.best.desc}」期望 ${fmt(rv.best.q)}`)
+        : h('span', {}, `AI 点评：你的出法在 ${rv.total} 种中排第 ${rv.rank}，期望 ${fmt(rv.chosen_q)}；AI 首选「${rv.best.desc}」期望 ${fmt(rv.best.q)}`);
     toast(node, '', 5200);
   }
   const fmt = (q) => (q == null ? '—' : (q >= 0 ? '+' : '') + q.toFixed(2));
@@ -525,8 +532,18 @@ export function mountTable(app) {
       });
       const wt = rr.win_team;
       let change;
+      const scoreLine = rr.score != null
+        ? h('div', { class: 'scoreline' }, h('span', {}, `底分 ${rr.gain}`), h('span', { class: 'x' }, '×'), h('span', {}, `倍数 ${s2.multiplier}`), h('span', { class: 'x' }, '='),
+          h('b', { class: weWin ? '' : 'neg' }, `${weWin ? '+' : '-'}${rr.score} 分`))
+        : null;
       if (s2.length === 'quick') {
-        change = h('div', { class: 'sub' }, `${weWin ? '我方' : '对方'} +${rr.gain} 分　总积分 ${s2.points[ot]} : ${s2.points[1 - ot]}`);
+        change = h('div', {}, scoreLine, h('div', { class: 'sub' }, rr.score != null
+          ? `总积分 ${s2.points[ot]} : ${s2.points[1 - ot]}`
+          : `${weWin ? '我方' : '对方'} +${rr.gain} 分　总积分 ${s2.points[ot]} : ${s2.points[1 - ot]}`));
+      } else if (scoreLine) {
+        change = h('div', {},
+          h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, `${wt === ot ? '我方' : '对方'}升 ${rr.gain} 级`), h('span', { class: 'to' }, RANKS[rr.after[wt]])),
+          scoreLine, h('div', { class: 'sub' }, `总分 ${s2.totals[ot]} : ${s2.totals[1 - ot]}`));
       } else {
         change = h('div', {},
           h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, `${wt === ot ? '我方' : '对方'}升 ${rr.gain} 级`), h('span', { class: 'to' }, RANKS[rr.after[wt]])),

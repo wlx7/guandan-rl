@@ -74,6 +74,37 @@ pub struct Game {
     pub winner: i8,
     pub jiefeng: bool,
     pub trick_id: u32,
+    /// Bombs played this round: [4-5 cards, 6+ cards, straight flush, joker bomb]
+    pub bombs: [u8; 4],
+}
+
+/// Optional score / multiplier system: round score = base (1/2/3 like the level gain)
+/// x 2^(number of doubling bombs), capped.
+#[derive(Clone, Copy, Debug)]
+pub struct ScoreRules {
+    pub doubles: [bool; 4],
+    pub cap: u32,
+}
+
+impl ScoreRules {
+    pub fn multiplier(&self, bombs: &[u8; 4]) -> u32 {
+        let mut e: u32 = 0;
+        for k in 0..4 {
+            if self.doubles[k] {
+                e += bombs[k] as u32;
+            }
+        }
+        (1u32 << e.min(20)).min(self.cap.max(1))
+    }
+}
+
+pub fn bomb_category(m: &Move) -> Option<usize> {
+    match m.kind {
+        Kind::Bomb => Some(if m.cards.len() >= 6 { 1 } else { 0 }),
+        Kind::StraightFlush => Some(2),
+        Kind::JokerBomb => Some(3),
+        _ => None,
+    }
 }
 
 #[inline]
@@ -114,6 +145,7 @@ impl Game {
             winner: -1,
             jiefeng: false,
             trick_id: 0,
+            bombs: [0; 4],
         };
         g.start_round();
         g
@@ -156,6 +188,7 @@ impl Game {
         self.pending_returns.clear();
         self.jiefeng = false;
         self.trick_id = 0;
+        self.bombs = [0; 4];
         self.phase = Phase::Play;
 
         match (self.prev_order, self.rules.tribute) {
@@ -373,6 +406,9 @@ impl Game {
             self.played[p as usize][c as usize] += 1;
         }
         self.history.push((p, mv.clone()));
+        if let Some(k) = bomb_category(mv) {
+            self.bombs[k] = self.bombs[k].saturating_add(1);
+        }
         self.last_move = Some(mv.clone());
         self.last_player = p;
         self.passes = 0;
@@ -486,6 +522,17 @@ impl Game {
             Phase::RoundOver => self.start_round(),
             Phase::MatchOver => self.new_match(),
             _ => {}
+        }
+    }
+
+    /// Score of a finished round for `team` under a multiplier system.
+    pub fn round_score(&self, t: u8, rules: &ScoreRules) -> f32 {
+        match &self.last_result {
+            None => 0.0,
+            Some(r) => {
+                let v = r.gain as f32 * rules.multiplier(&self.bombs) as f32;
+                if r.win_team == t { v } else { -v }
+            }
         }
     }
 

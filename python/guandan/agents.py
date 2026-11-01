@@ -74,7 +74,7 @@ class BatchPolicy:
 class GameAgent:
     """Wraps a model for single-game decisions in the battle server."""
 
-    def __init__(self, path_or_model, device="cpu"):
+    def __init__(self, path_or_model, device="cpu", search: dict | None = None):
         if isinstance(path_or_model, str):
             self.model, self.meta = load_checkpoint(path_or_model, device)
             self.path = path_or_model
@@ -82,10 +82,17 @@ class GameAgent:
             self.model, self.meta, self.path = path_or_model, {}, None
         self.device = torch.device(device)
         self.model.eval()
+        self.searcher = None
+        if search:
+            from .search import SearchAgent
+            self.searcher = SearchAgent(self.model, device, **search)
 
     @torch.no_grad()
     def evaluate(self, game: "_core.Game"):
-        """Returns [(move, q)] sorted by q descending, where move = (kind, key, cards)."""
+        """Returns [(move, q)] sorted by q descending, where move = (kind, key, cards).
+        q is in units of 3 levels (multiply by 3 for expected level change)."""
+        if self.searcher is not None:
+            return [(m, sc / 3.0) for m, sc, _, _ in self.searcher.evaluate(game)]
         moves = game.legal_moves()
         s, h, a, n = game.encode()
         d = self.device
