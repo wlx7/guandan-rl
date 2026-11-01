@@ -47,7 +47,7 @@ export class LineChart {
     const o = this.opts;
     let xmin = Math.min(...pts.map((p) => p.x));
     let xmax = Math.max(...pts.map((p) => p.x));
-    if (xmax === xmin) { xmax = xmin + 1; }
+    if (xmax === xmin) { const d = Math.max(1, Math.abs(xmin) * 0.1); xmin -= d; xmax += d; }
     let ymin = o.yMin ?? Math.min(...pts.map((p) => p.y));
     let ymax = o.yMax ?? Math.max(...pts.map((p) => p.y));
     if (o.yMin == null || o.yMax == null) { const pad = (ymax - ymin) * 0.08 || 0.1; if (o.yMin == null) ymin -= pad; if (o.yMax == null) ymax += pad; }
@@ -75,10 +75,14 @@ export class LineChart {
     }
     g.textAlign = 'center';
     g.textBaseline = 'top';
-    const xt = niceTicks(xmin, xmax, Math.max(2, Math.floor(W / 110)));
+    const xt = [...new Set(niceTicks(xmin, xmax, Math.max(2, Math.floor(W / 110))).map((v) => fmtFrames(v)))].length < 2 ? [] : niceTicks(xmin, xmax, Math.max(2, Math.floor(W / 110)));
+    const seen = new Set();
     for (const v of xt) {
+      const lab = o.xFormat ? o.xFormat(v) : fmtFrames(v);
+      if (seen.has(lab)) continue;
+      seen.add(lab);
       if (v < xmin || v > xmax) continue;
-      g.fillText(o.xFormat ? o.xFormat(v) : fmtFrames(v), X(v), H - B + 6);
+      g.fillText(lab, X(v), H - B + 6);
     }
     this.series.forEach((s) => {
       if (!s.points.length) return;

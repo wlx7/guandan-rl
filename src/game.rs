@@ -322,10 +322,11 @@ impl Game {
         if !opts.iter().any(|o| o.cards == mv.cards) {
             return Err("illegal return card (must be 10 or lower)".into());
         }
-        let (r, p) = self.pending_returns.remove(0);
-        if r != self.current {
-            return Err("not your turn".into());
+        match self.pending_returns.first() {
+            Some(&(r0, _)) if r0 == self.current => {}
+            _ => return Err("not your turn".into()),
         }
+        let (r, p) = self.pending_returns.remove(0);
         let c = mv.cards[0];
         self.hands[r as usize][c as usize] -= 1;
         self.hands[p as usize][c as usize] += 1;

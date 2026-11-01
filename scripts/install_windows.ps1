@@ -21,59 +21,59 @@ try {
     New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.local\bin" | Out-Null
     Expand-Archive $zip -DestinationPath "$env:USERPROFILE\.local\bin" -Force
   }
-  uv --version 2>&1 | Out-Host
+  uv --version 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { throw 'uv 安装失败' }
 
   Step '2/4 创建 Python 3.12 环境（.venv）'
   if (-not (Test-Path $py)) {
-    uv venv .venv --python 3.12 --no-progress 2>&1 | Out-Host
+    uv venv .venv --python 3.12 --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
     if (-not (Test-Path $py)) {
       Write-Host '官方源下载失败，改用国内镜像'
       $env:UV_PYTHON_INSTALL_MIRROR = 'https://registry.npmmirror.com/-/binary/python-build-standalone'
-      uv venv .venv --python 3.12 --no-progress 2>&1 | Out-Host
+      uv venv .venv --python 3.12 --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
     }
   }
   if (-not (Test-Path $py)) { throw 'Python 环境创建失败' }
-  & $py --version 2>&1 | Out-Host
+  & $py --version 2>&1 | ForEach-Object { "$_" } | Out-Host
 
   Step '3/4 安装 PyTorch'
   $ok = $false
   & $py -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>$null
   if ($LASTEXITCODE -eq 0) { $ok = $true; Write-Host '已安装 CUDA 版 PyTorch，跳过' }
   $hasGpu = $null -ne (Get-Command nvidia-smi -ErrorAction SilentlyContinue)
-  if ($hasGpu) { nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv 2>&1 | Out-Host }
+  if ($hasGpu) { nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv 2>&1 | ForEach-Object { "$_" } | Out-Host }
   if (-not $ok -and $hasGpu) {
     foreach ($cu in @('cu126', 'cu124', 'cu121', 'cu118')) {
       Write-Host "尝试安装 PyTorch ($cu)，文件较大（约 2.5GB），请耐心等待…"
-      uv pip install --python $py --reinstall-package torch torch --index-url "https://download.pytorch.org/whl/$cu" 2>&1 | Out-Host
+      uv pip install --python "$py" --reinstall-package torch torch --index-url "https://download.pytorch.org/whl/$cu" 2>&1 | ForEach-Object { "$_" } | Out-Host
       if ($LASTEXITCODE -ne 0) {
         Write-Host "官方源失败，尝试阿里云镜像 ($cu)"
-        uv pip install --python $py --reinstall-package torch torch -f "https://mirrors.aliyun.com/pytorch-wheels/$cu/" -i $tuna 2>&1 | Out-Host
+        uv pip install --python "$py" --reinstall-package torch torch -f "https://mirrors.aliyun.com/pytorch-wheels/$cu/" -i $tuna 2>&1 | ForEach-Object { "$_" } | Out-Host
       }
-      & $py -c "import torch; assert torch.cuda.is_available(); x = torch.randn(512, 512, device='cuda'); print('CUDA OK', torch.__version__, torch.cuda.get_device_name(0), float((x @ x).sum()))" 2>&1 | Out-Host
+      & $py -c "import torch; assert torch.cuda.is_available(); x = torch.randn(512, 512, device='cuda'); print('CUDA OK', torch.__version__, torch.cuda.get_device_name(0), float((x @ x).sum()))" 2>&1 | ForEach-Object { "$_" } | Out-Host
       if ($LASTEXITCODE -eq 0) { $ok = $true; break }
     }
   }
   if (-not $ok) {
     Write-Host '安装 CPU 版 PyTorch'
-    uv pip install --python $py torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | Out-Host
-    if ($LASTEXITCODE -ne 0) { uv pip install --python $py torch -i $tuna }
+    uv pip install --python "$py" torch --index-url https://download.pytorch.org/whl/cpu 2>&1 | ForEach-Object { "$_" } | Out-Host
+    if ($LASTEXITCODE -ne 0) { uv pip install --python "$py" torch -i $tuna }
   }
 
   Step '4/4 安装 掼蛋 AI'
   $whl = Get-ChildItem -Path $PSScriptRoot -Filter 'guandan_rl-*win_amd64.whl' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
   if ($whl) { $src = $whl.FullName } else {
-    $rel = Invoke-RestMethod 'https://api.github.com/repos/wlx7/guandan-rl/releases/latest' -Headers @{ 'User-Agent' = 'guandan-installer' }
-    $asset = $rel.assets | Where-Object { $_.name -like '*win_amd64.whl' } | Select-Object -First 1
+    $rels = Invoke-RestMethod 'https://api.github.com/repos/wlx7/guandan-rl/releases?per_page=10' -Headers @{ 'User-Agent' = 'guandan-installer' }
+    $asset = $rels | ForEach-Object { $_.assets } | Where-Object { $_.name -like '*win_amd64.whl' } | Select-Object -First 1
     if (-not $asset) { throw '在 GitHub Release 中找不到 Windows 安装包' }
     $src = Join-Path $PSScriptRoot $asset.name
     Write-Host "下载 $($asset.browser_download_url)"
     Invoke-WebRequest $asset.browser_download_url -OutFile $src
   }
   Write-Host "安装 $src"
-  uv pip install --python $py --reinstall-package guandan-rl $src 2>&1 | Out-Host
-  if ($LASTEXITCODE -ne 0) { uv pip install --python $py --reinstall-package guandan-rl $src -i $tuna }
-  & $py -m guandan info 2>&1 | Out-Host
+  uv pip install --python "$py" --reinstall-package guandan-rl "$src" 2>&1 | ForEach-Object { "$_" } | Out-Host
+  if ($LASTEXITCODE -ne 0) { uv pip install --python "$py" --reinstall-package guandan-rl "$src" -i $tuna }
+  & $py -m guandan info 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { throw '安装验证失败' }
   Write-Host "`nINSTALL_OK  安装完成！双击 start_windows.bat 启动。" -ForegroundColor Green
 } catch {

@@ -87,8 +87,6 @@ class GameAgent:
     def evaluate(self, game: "_core.Game"):
         """Returns [(move, q)] sorted by q descending, where move = (kind, key, cards)."""
         moves = game.legal_moves()
-        if len(moves) == 1:
-            return [(moves[0], 0.0)]
         s, h, a, n = game.encode()
         d = self.device
         st = torch.frombuffer(bytearray(s), dtype=torch.uint8).view(1, STATE_DIM).to(d).float()

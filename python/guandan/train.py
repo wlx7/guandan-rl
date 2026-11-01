@@ -55,6 +55,7 @@ def build_parser():
     ap.add_argument("--total-frames", type=float, default=0, help="stop after this many samples (0 = no limit)")
     ap.add_argument("--max-hours", type=float, default=0, help="stop after this many hours (0 = no limit)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--no-amp", action="store_true", help="disable mixed precision on GPU")
     return ap
 
 
@@ -220,6 +221,10 @@ def run(args):
     cfg = model.cfg
     model.to(device).train()
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    use_amp = device.startswith("cuda") and not args.no_amp
+    if device.startswith("cuda"):
+        torch.backends.cudnn.benchmark = True
+    scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     if resume_opt is not None:
         try:
             opt.load_state_dict(resume_opt)
@@ -321,12 +326,15 @@ def run(args):
                 ht = torch.from_numpy(h).to(device, non_blocking=True).float()
                 at = torch.from_numpy(a).to(device, non_blocking=True).float()
                 tt = torch.from_numpy(t).to(device)
-                pred = model(st, ht, at)
-                loss = torch.nn.functional.mse_loss(pred, tt)
+                with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                    pred = model(st, ht, at)
+                loss = torch.nn.functional.mse_loss(pred.float(), tt)
                 opt.zero_grad(set_to_none=True)
-                loss.backward()
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 40.0)
-                opt.step()
+                scaler.step(opt)
+                scaler.update()
                 trained += args.batch
                 budget += 1
                 n_updates += 1

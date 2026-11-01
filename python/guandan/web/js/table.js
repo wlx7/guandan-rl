@@ -322,6 +322,7 @@ export function mountTable(app) {
     const vw = window.innerWidth;
     let ch = Math.min(118, Math.max(58, vh * 0.15));
     if (vw < 480) ch = Math.min(ch, 74);
+    if (vh < 520) ch = Math.max(44, vh * 0.125);
     return { cw: Math.round(ch * 0.7), ch: Math.round(ch) };
   }
 
@@ -342,7 +343,7 @@ export function mountTable(app) {
     const sx = n > 1 ? Math.min(cw * 1.06, (W - cw) / (n - 1)) : 0;
     const maxStack = Math.max(...cols.map((c) => c.length));
     let sy = ch * 0.27;
-    const maxH = window.innerHeight * 0.34;
+    const maxH = window.innerHeight * (window.innerHeight < 520 ? 0.28 : 0.34);
     if (ch + (maxStack - 1) * sy > maxH) sy = Math.max(ch * 0.16, (maxH - ch) / Math.max(1, maxStack - 1));
     const lift = ch * 0.22;
     const totalW = (n - 1) * sx + cw;
@@ -528,7 +529,7 @@ export function mountTable(app) {
       const waiting = readyHumans.filter((x) => !x.ready).map((x) => x.name);
       const meReady = you() >= 0 && s2.seats[you()].ready;
       const btnText = rr.match_over && s2.length === 'full' ? '再来一场' : '下一局';
-      box.replaceChildren(
+      box.replaceChildren(...[
         rr.match_over && s2.length === 'full' ? h('div', { class: 'win-banner' }, weWin ? '胜' : '负') : null,
         h('h2', {}, title),
         h('div', { class: 'sub' }, s2.length === 'quick' ? `本局打 ${RANKS[s2.level]}` : `本局打 ${RANKS[s2.level]}`),
@@ -537,7 +538,7 @@ export function mountTable(app) {
           you() >= 0 ? h('button', { class: 'btn primary', disabled: meReady, onclick: () => send({ action: 'ready' }) }, meReady ? '已准备' : btnText) : null,
           h('button', { class: 'btn', onclick: leave }, '离开')),
         waiting.length && (meReady || you() < 0) ? h('div', { class: 'sub', style: { marginTop: '10px' } }, `等待：${waiting.join('、')}`) : null,
-      );
+      ].filter(Boolean));
     };
     fill();
     S.modal = modal(box);

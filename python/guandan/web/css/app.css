@@ -334,8 +334,9 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .win-banner { font-family: var(--serif); font-size: 40px; font-weight: 900; text-align: center; color: var(--brass-hi); letter-spacing: 0.2em; animation: stamp2 0.6s cubic-bezier(.2, 1.4, .4, 1) both; }
 @keyframes stamp2 { from { transform: scale(2); opacity: 0; } }
 
-.toast-layer { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; z-index: 60; pointer-events: none; width: min(560px, 92vw); }
-.toast { background: rgba(8, 26, 20, 0.95); border: 1px solid var(--line-2); padding: 9px 14px; border-radius: 10px; box-shadow: var(--shadow); font-size: 14px; animation: toastin 0.25s ease-out both; text-align: center; }
+.toast-layer { position: fixed; top: 66px; left: 12px; display: grid; gap: 8px; z-index: 60; pointer-events: none; width: min(440px, calc(100vw - 24px)); justify-items: start; }
+.toast { background: rgba(8, 26, 20, 0.95); border: 1px solid var(--line-2); padding: 9px 14px; border-radius: 10px; box-shadow: var(--shadow); font-size: 14px; animation: toastin 0.25s ease-out both; text-align: left; line-height: 1.5; }
+body:not(.in-game) .toast-layer { left: 50%; transform: translateX(-50%); justify-items: center; }
 .toast.err { border-color: rgba(226, 90, 76, 0.7); color: #ffd9d3; }
 .toast.out { transition: opacity 0.3s, transform 0.3s; opacity: 0; transform: translateY(-6px); }
 @keyframes toastin { from { transform: translateY(-8px); opacity: 0; } }
@@ -406,10 +407,18 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .seat-chip { width: 120px; padding: 6px; }
   .mini-hand { max-width: 160px; }
   .seat.left .mini-hand, .seat.right .mini-hand { max-width: 90px; }
+  .board.revealed .zone.left { left: 110px; }
+  .board.revealed .zone.right { right: 110px; }
+  .board.revealed .zone.top { top: 110px; }
   .btn { font-size: 14px; }
 }
 @media (max-height: 520px) {
-  :root { --pcw: 32px; --pch: 45px; }
+  :root { --pcw: 30px; --pch: 42px; --mcw: 16px; --mch: 23px; }
+  .board.revealed .zone.left { left: 130px; }
+  .board.revealed .zone.right { right: 130px; }
+  .board.revealed .zone.top { top: 46px; }
+  .seat.left .mini-hand, .seat.right .mini-hand { max-width: 120px; }
+  .seat.top .mini-hand { max-width: 260px; }
   .avatar { width: 36px; height: 36px; font-size: 15px; }
   .zone.top { top: 50px; }
   .seat.left, .seat.right { top: 42%; }

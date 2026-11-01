@@ -50,12 +50,12 @@ async function viewHome() {
       ));
     }
     const dev = info.device || {};
-    foot.append(
+    foot.append(...[
       h('span', {}, dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch')),
       h('span', {}, info.default_model ? `模型：${info.default_model.split(/[\\/]/).slice(-2).join('/')}` : '还没有可用模型'),
       info.lan_urls && info.lan_urls[0] ? h('span', {}, `局域网地址：${info.lan_urls[0]}`) : null,
       h('span', {}, `v${info.version}`),
-    );
+    ].filter(Boolean));
   } catch (e) {
     foot.append(h('span', {}, '无法连接服务：' + e.message));
   }

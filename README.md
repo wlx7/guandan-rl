@@ -1,1 +1,126 @@
-# guandan-rl
+# 掼蛋 AI（guandan-rl）
+
+完全靠**自我对弈强化学习**训练出来的掼蛋 AI，附带一个能在浏览器里用的训练中心和牌桌：可以看着胜率曲线训练模型，也可以和 AI 学牌、对战，同一 WiFi 下的手机和电脑还能一起上桌。
+
+![牌桌](docs/images/table.png)
+
+## 功能
+
+- **完整的掼蛋规则**：逢人配、三带二、顺子、三连对、钢板、各类炸弹、同花顺、天王炸，进贡 / 还贡 / 抗贡、接风、双上升三级、过 A、打 A 三次不过退回 2。详见 [规则说明](docs/RULES.md)。
+- **纯强化学习**：深度蒙特卡洛（DMC）自对弈，不用任何人类棋谱或手写策略训练。每个 AI 只能看到自己的手牌和公开的出牌记录。详见 [训练说明](docs/TRAINING.md)。
+- **高性能**：规则引擎、合法出牌生成和特征编码都用 Rust 编写（单核每秒约 6 万次决策），PyTorch 负责网络；自对弈多进程并行，学习在 GPU 上进行。
+- **训练中心**：选择模型大小（推荐 medium，约 2.5M 参数、5 MB）、从零开始或在基准模型上继续训练，实时查看对规则 AI / 基准模型 / 随机出牌的胜率曲线、损失和速度。
+- **对战**
+  - **教学模式**：你和三个 AI。不限时，可以让 AI 给出前五个出牌建议（带期望升级数），每次出牌后 AI 会点评，还可以明牌看所有人的牌。
+  - **实战模式**：任意组合 AI 和真人。每步限时 20 秒，超时随机出一手合法的牌；看不到别人的牌，自己出完后可以看队友的牌。
+  - **快速对局**（随机级牌、单局结算）或 **竞技模式**（从 2 打到 A）。
+  - **局域网联机**：其他人用同一 WiFi 下的手机或电脑扫码 / 打开网址即可加入。
+- 发牌、出牌、炸弹、进贡、名次、升级都有动画和音效，手机横竖屏都能用。
+
+| 训练中心 | 教学模式（AI 提示） |
+|---|---|
+| ![训练中心](docs/images/train.png) | ![AI 提示](docs/images/hint.png) |
+
+## 安装
+
+### Windows（推荐，一键安装）
+
+1. 从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `install_windows.bat`、`install_windows.ps1`、`start_windows.bat`、`train_windows.bat`，放进同一个文件夹（例如 `D:\guandan`）。
+2. 双击 `install_windows.bat`。它会自动：
+   - 安装 [uv](https://github.com/astral-sh/uv) 和 Python 3.12（放在该文件夹的 `.venv` 里，不影响系统）；
+   - 检测 NVIDIA 显卡并安装对应的 **CUDA 版 PyTorch**（依次尝试 cu126 / cu124 / cu121 / cu118，失败自动换国内镜像，没有显卡则装 CPU 版）；
+   - 安装本程序（含训练好的模型）。
+3. 双击 `start_windows.bat`，浏览器会自动打开 `http://127.0.0.1:8000`。
+
+第一次启动时 Windows 防火墙会询问是否允许 Python 访问网络，请勾选“专用网络”，局域网里的其他设备才能连进来。
+
+### Linux / macOS
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install torch                      # 按 https://pytorch.org 选择合适的 CUDA 版本
+pip install guandan_rl-*.whl           # 从 Releases 下载对应平台的 wheel
+guandan serve
+```
+
+### 从源码构建
+
+需要 Rust（`rustup`）和 Python 3.9+：
+
+```bash
+git clone https://github.com/wlx7/guandan-rl && cd guandan-rl
+pip install maturin torch
+maturin build --release && pip install target/wheels/*.whl
+guandan serve
+```
+
+## 使用
+
+### 局域网联机
+
+1. 主机上点“开一桌”，选**实战模式**，把要给朋友坐的座位设为“玩家”，点“开桌”。
+2. 牌桌会显示局域网地址和二维码（例如 `http://192.168.1.8:8000/#/join`）。朋友连上同一个 WiFi，用手机扫码或在浏览器打开这个地址，选座位、填昵称即可加入。
+3. 所有玩家到齐后自动发牌。对家是你的队友。
+
+断线后重新打开页面会自动回到原来的座位。
+
+### 出牌操作
+
+- 点选手牌，或在手牌上**按住拖动**连续选择；**双击**一列选中同点数的所有牌；右键或“重选”清空。
+- 回车 = 出牌，空格 = 不出，Esc = 取消选择。
+- 一手牌有多种打法时（例如 7 7 7 + 两张逢人配，可以当 5 张炸弹也可以当三带二），会弹出让你选择。
+
+### 训练
+
+打开“训练中心”，选择模型大小、基准模型和并行进程数，点“开始训练”。训练在后台进程中进行，关掉浏览器页面不影响；用同一个名称再次开始会从上次的进度继续。训练出的模型点“加入模型库”后，就能在开桌时选择。
+
+也可以不开界面，直接用命令行或双击 `train_windows.bat`：
+
+```bash
+python -m guandan.train --name main --preset medium --actors 12
+```
+
+### 命令行一览
+
+```
+guandan serve [--port 8000]         启动界面（默认监听所有网卡，供局域网访问）
+guandan train ...                   训练（参数见 python -m guandan.train -h）
+guandan eval model.pt --opponent rule --rounds 2000
+guandan info                        显示 GPU、模型大小预设和已有模型
+```
+
+数据（训练记录、模型库）默认保存在 `~/guandan_data`，Windows 一键安装版保存在安装文件夹的 `guandan_data`，可用环境变量 `GUANDAN_HOME` 修改。
+
+## 项目结构
+
+```
+src/                 Rust 规则引擎（PyO3 扩展 guandan._core）
+  cards.rs           牌、级牌、逢人配、随机数
+  moves.rs           牌型识别（含逢人配的所有解释）与合法出牌生成
+  game.rs            整场比赛状态机：发牌、进贡还贡抗贡、接风、升级、过 A
+  features.rs        观测编码（只用当前玩家可见的信息）
+  venv.rs            批量环境（自对弈与评估）
+  bot.rs             规则 AI（只用于评估，不参与训练）
+python/guandan/
+  model.py           Q 网络与模型大小预设
+  train.py           DMC 自对弈训练（多进程 actor + GPU learner + 评估进程）
+  evaluate.py        对战评估
+  agents.py          推理封装
+  server/            FastAPI + WebSocket 对战服务器与训练管理
+  web/               前端（原生 JS，无需构建）
+scripts/             Windows 一键安装 / 启动 / 训练脚本
+tests/               Rust 与 Python 测试
+```
+
+更多技术细节见 [架构说明](docs/ARCHITECTURE.md)。
+
+## 测试
+
+```bash
+cargo test --release --no-default-features   # 规则引擎
+pytest tests                                  # 绑定、训练环境、服务器与 WebSocket 对局
+```
+
+## 许可
+
+MIT
