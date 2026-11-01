@@ -25,10 +25,11 @@ STATE = {"room": None, "port": 8000}
 
 def lan_ips():
     ips = set()
-    try:
+    primary = None
+    try:  # the address of the interface that holds the default route (normally the Wi-Fi card)
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.255.255.255", 1))
-        ips.add(s.getsockname()[0])
+        s.connect(("8.8.8.8", 80))
+        primary = s.getsockname()[0]
         s.close()
     except Exception:
         pass
@@ -39,8 +40,10 @@ def lan_ips():
         pass
     ips = [ip for ip in ips if not ip.startswith("127.")]
 
-    def score(ip):  # prefer typical home Wi-Fi ranges
-        return (0 if ip.startswith("192.168.") else 1 if ip.startswith("10.") else 2, ip)
+    def score(ip):  # default-route address first, then typical home Wi-Fi ranges
+        return (0 if ip == primary else 1 if ip.startswith("192.168.") else 2 if ip.startswith("10.") else 3, ip)
+    if primary and not primary.startswith("127.") and primary not in ips:
+        ips.append(primary)
     return sorted(ips, key=score)
 
 

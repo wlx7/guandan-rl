@@ -211,9 +211,10 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .card.m .tagw { display: none; }
 
 /* ---------- game table ---------- */
-.gt { position: fixed; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; overflow: hidden; }
+.gt { position: fixed; inset: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
 .topbar { display: flex; align-items: center; gap: 10px; padding: 8px max(12px, env(safe-area-inset-left)) 6px; background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent); z-index: 5; }
-.topbar .grow { flex: 1; display: flex; justify-content: center; }
+.topbar .grow { flex: 1; display: flex; justify-content: center; min-width: 0; }
+.topbar > .btn { flex: none; }
 .lvbox { display: flex; align-items: center; gap: 10px; }
 .teamlv { display: grid; text-align: center; font-size: 11px; color: var(--text-2); line-height: 1.1; white-space: nowrap; }
 .btn.icon.muted { opacity: 0.5; text-decoration: line-through; }
@@ -231,7 +232,7 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .plaque .sub { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.8; margin-top: 2px; white-space: nowrap; }
 .plaque.pulse { animation: plaquepulse 1.2s ease-out 1; }
 @keyframes plaquepulse { 30% { transform: scale(1.12); } }
-.meta { font-size: 12px; color: var(--text-2); text-align: right; line-height: 1.35; }
+.meta { font-size: 12px; color: var(--text-2); text-align: right; line-height: 1.35; min-width: 0; flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .meta b { color: var(--text); font-weight: 600; }
 
 .board { position: relative; min-height: 0; }
@@ -392,6 +393,13 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .charts { grid-template-columns: 1fr; }
   .wait-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .topbar .btn.icon { padding: 0.35em 0.6em; }
+  .meta div:first-child b { display: block; }
+}
+@media (max-width: 420px) {
+  .meta div:first-child { display: none; }
 }
 @media (max-width: 640px) {
   :root { --pcw: 34px; --pch: 48px; --mcw: 18px; --mch: 26px; }
