@@ -1,0 +1,15 @@
+/target
+__pycache__/
+*.pyc
+*.so
+*.pyd
+*.egg-info/
+/dist
+/build
+.venv/
+venv/
+guandan_data/
+*.tmp
+.DS_Store
+.idea/
+.vscode/

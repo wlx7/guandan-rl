@@ -1,0 +1,41 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "guandan-rl"
+version = "1.0.0"
+description = "掼蛋 AI：纯强化学习自对弈训练（Rust 规则引擎 + PyTorch DMC）与局域网对战平台"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "wlx7" }]
+keywords = ["guandan", "reinforcement-learning", "card-game", "self-play", "pytorch"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy>=1.22",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "qrcode>=7.4",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.1"]
+dev = ["pytest", "maturin>=1.5"]
+
+[project.scripts]
+guandan = "guandan.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/wlx7/guandan-rl"
+
+[tool.maturin]
+python-source = "python"
+module-name = "guandan._core"
+features = ["extension-module"]
+include = [{ path = "python/guandan/web/**/*", format = ["sdist", "wheel"] }, { path = "python/guandan/models/*", format = ["sdist", "wheel"] }]

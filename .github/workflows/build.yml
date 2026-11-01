@@ -1,0 +1,94 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rust-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --release --no-default-features
+
+  wheels:
+    name: wheel ${{ matrix.os }} ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x64
+          - os: ubuntu-latest
+            target: x86_64
+          - os: macos-14
+            target: aarch64
+          - os: macos-13
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist
+          manylinux: auto
+      - name: Smoke test
+        shell: bash
+        run: |
+          python -m pip install numpy fastapi "uvicorn[standard]" qrcode
+          python -m pip install --no-deps dist/*.whl
+          python -c "import guandan._core as c; g=c.Game(1); print(c.dims(), len(g.legal_moves()))"
+          python -c "from guandan.evaluate import evaluate; print(evaluate('rule','random',rounds=200))" || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  release:
+    needs: [rust-tests, wheels, sdist]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Collect release assets
+        run: |
+          mkdir -p assets
+          cp dist/* assets/
+          cp python/guandan/models/*.pt assets/ 2>/dev/null || true
+          cp scripts/install_windows.bat scripts/start_windows.bat scripts/train_windows.bat assets/ 2>/dev/null || true
+          cp scripts/install.sh assets/ 2>/dev/null || true
+          ls -la assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: assets/*
+          body_path: docs/RELEASE_NOTES.md
+          fail_on_unmatched_files: false
