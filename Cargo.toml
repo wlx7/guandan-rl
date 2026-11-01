@@ -1,6 +1,6 @@
 [package]
 name = "guandan_core"
-version = "1.0.0"
+version = "0.9.0"
 edition = "2021"
 description = "High performance Guandan rules engine for reinforcement learning"
 license = "MIT"

@@ -31,7 +31,7 @@ jobs:
             target: x86_64
           - os: macos-14
             target: aarch64
-          - os: macos-13
+          - os: macos-14
             target: x86_64
     steps:
       - uses: actions/checkout@v4
@@ -45,6 +45,7 @@ jobs:
           args: --release --out dist
           manylinux: auto
       - name: Smoke test
+        if: ${{ !(startsWith(matrix.os, 'macos') && matrix.target == 'x86_64') }}
         shell: bash
         run: |
           python -m pip install numpy fastapi "uvicorn[standard]" qrcode
@@ -83,6 +84,7 @@ jobs:
         run: |
           mkdir -p assets
           cp dist/* assets/
+          cp scripts/install_windows.ps1 assets/ 2>/dev/null || true
           cp python/guandan/models/*.pt assets/ 2>/dev/null || true
           cp scripts/install_windows.bat scripts/start_windows.bat scripts/train_windows.bat assets/ 2>/dev/null || true
           cp scripts/install.sh assets/ 2>/dev/null || true
