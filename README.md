@@ -2,7 +2,7 @@
 
 完全靠**自我对弈强化学习**训练出来的掼蛋 AI，附带一个能在浏览器里用的训练中心和牌桌：可以看着胜率曲线训练模型，也可以和 AI 学牌、对战，同一 WiFi 下的手机和电脑还能一起上桌。
 
-![牌桌](docs/images/table.png)
+![牌桌](docs/images/table.jpg)
 
 ## 功能
 
@@ -19,7 +19,9 @@
 
 | 训练中心 | 教学模式（AI 提示） |
 |---|---|
-| ![训练中心](docs/images/train.png) | ![AI 提示](docs/images/hint.png) |
+| ![训练中心](docs/images/train.jpg) | ![AI 提示](docs/images/hint.jpg) |
+| **局域网等人（扫码加入）** | **手机上打牌（实战模式 20 秒计时）** |
+| ![局域网](docs/images/lan.jpg) | <img src="docs/images/phone.jpg" width="260"> |
 
 ## 安装
 

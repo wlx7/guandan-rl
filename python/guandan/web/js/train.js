@@ -36,7 +36,8 @@ export function mountTrain(app) {
     } catch (e) { toast(e.message, 'err'); return; }
     form.preset = st.info.recommended_preset || 'medium';
     const cpu = st.info.cpu_count || 4;
-    form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2)));
+    if (st.info.device.cuda) { form.actor_device = 'cuda'; form.actors = 3; form.envs = 256; }
+    else { form.actor_device = 'cpu'; form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2))); form.envs = 64; }
     form.batch = st.info.device.cuda ? 2048 : 512;
     const running = st.runs.find((r) => r.status === 'running');
     st.sel = running ? running.name : (st.runs[0] && st.runs[0].name) || null;
@@ -64,7 +65,7 @@ export function mountTrain(app) {
     const devSel = h('select', { onchange: (e) => { form.device = e.target.value; } },
       ...[['auto', '自动'], ['cuda', 'GPU (CUDA)'], ['cpu', 'CPU']].map(([v, t]) => h('option', { value: v, selected: form.device === v }, t)));
     const actDevSel = h('select', { onchange: (e) => { form.actor_device = e.target.value; } },
-      ...[['cpu', 'CPU（推荐，多进程）'], ['cuda', 'GPU']].map(([v, t]) => h('option', { value: v, selected: form.actor_device === v }, t)));
+      ...[['cuda', 'GPU（有显卡时推荐）'], ['cpu', 'CPU（多进程）']].map(([v, t]) => h('option', { value: v, selected: form.actor_device === v }, t)));
     left.replaceChildren(
       h('h2', {}, '新建训练'),
       h('div', { class: 'form' },
@@ -78,7 +79,7 @@ export function mountTrain(app) {
           h('div', { class: 'field' }, h('label', {}, '自对弈设备'), actDevSel)),
         h('div', { class: 'hint dim', style: { fontSize: '12px' } }, dev.cuda ? `检测到 ${dev.gpu}（${dev.gpu_mem_gb} GB），CPU ${info.cpu_count} 线程` : `未检测到 CUDA，将使用 CPU（${info.cpu_count} 线程）`),
         h('div', { class: 'grid2' },
-          h('div', { class: 'field' }, h('label', {}, '自对弈进程数'), num('actors', { min: 1, max: 64 }), h('span', { class: 'hint' }, `推荐 ${Math.max(1, Math.min(16, (info.cpu_count || 4) - ((info.cpu_count || 4) >= 12 ? 4 : 2)))}（留几个线程给学习和评估）`)),
+          h('div', { class: 'field' }, h('label', {}, '自对弈进程数'), num('actors', { min: 1, max: 64 }), h('span', { class: 'hint' }, dev.cuda ? '推荐：GPU 自对弈 3 个进程 × 256 局' : `推荐 ${Math.max(1, Math.min(16, (info.cpu_count || 4) - ((info.cpu_count || 4) >= 12 ? 4 : 2)))}（留几个线程给学习和评估）`)),
           h('div', { class: 'field' }, h('label', {}, '每进程并行对局'), num('envs', { min: 1, max: 512 }))),
         h('details', {}, h('summary', {}, '更多参数'),
           h('div', { class: 'grid2', style: { marginTop: '8px' } },

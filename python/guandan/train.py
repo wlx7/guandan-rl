@@ -39,10 +39,9 @@ def build_parser():
     ap.add_argument("--preset", default=RECOMMENDED_PRESET, choices=list(PRESETS))
     ap.add_argument("--base", default="", help="checkpoint to start from (基准模型)")
     ap.add_argument("--device", default="auto", help="learner device: auto|cuda|cpu")
-    ap.add_argument("--actor-device", default="cpu", help="device for actors: cpu|cuda")
-    _cpu = os.cpu_count() or 2
-    ap.add_argument("--actors", type=int, default=max(1, min(16, _cpu - (4 if _cpu >= 12 else 2))))
-    ap.add_argument("--envs", type=int, default=64, help="parallel matches per actor")
+    ap.add_argument("--actor-device", default="auto", help="device for self-play inference: auto|cuda|cpu")
+    ap.add_argument("--actors", type=int, default=0, help="self-play processes (0 = auto)")
+    ap.add_argument("--envs", type=int, default=0, help="parallel matches per actor (0 = auto)")
     ap.add_argument("--batch", type=int, default=0, help="0 = auto (2048 on GPU, 512 on CPU)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--epsilon", type=float, default=0.02)
@@ -64,10 +63,12 @@ def set_priority(level: str):
     """'low' for actors/evaluator so the learner always gets CPU time; 'high' for the learner."""
     try:
         if os.name == "nt":
-            import ctypes
-            cls = {"low": 0x4000, "high": 0x8000}[level]  # BELOW_NORMAL / ABOVE_NORMAL
-            k = ctypes.windll.kernel32
-            k.SetPriorityClass(k.GetCurrentProcess(), cls)
+            # only raise the learner: below-normal processes get parked on slow
+            # efficiency cores by Windows 11, which makes self-play ~10x slower
+            if level == "high":
+                import ctypes
+                k = ctypes.windll.kernel32
+                k.SetPriorityClass(k.GetCurrentProcess(), 0x8000)  # ABOVE_NORMAL
         elif level == "low":
             os.nice(5)
     except Exception:
@@ -234,6 +235,15 @@ def run(args):
     device = args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.actor_device == "auto":
+        args.actor_device = "cuda" if torch.cuda.is_available() else "cpu"
+    cpu = os.cpu_count() or 2
+    if not args.actors:
+        # GPU self-play: a few processes with many matches each saturate the GPU;
+        # CPU self-play: one single-threaded process per spare core
+        args.actors = 3 if args.actor_device == "cuda" else max(1, min(16, cpu - (4 if cpu >= 12 else 2)))
+    if not args.envs:
+        args.envs = 256 if args.actor_device == "cuda" else 64
     if not args.batch:
         args.batch = 2048 if device.startswith("cuda") else 512
     # avoid OpenMP oversubscription: actors already keep every core busy
@@ -324,7 +334,7 @@ def run(args):
     sync_every = 10
     n_updates = 0
     print(f"training {args.name}: preset={cfg.preset} params={count_params(model):,} device={device} "
-          f"actors={args.actors}x{args.envs}", flush=True)
+          f"actors={args.actors}x{args.envs} on {args.actor_device} batch={args.batch}", flush=True)
 
     interrupted = {"flag": False}
 

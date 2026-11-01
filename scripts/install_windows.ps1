@@ -61,14 +61,20 @@ try {
   }
 
   Step '4/4 安装 掼蛋 AI'
-  $whl = Get-ChildItem -Path $PSScriptRoot -Filter 'guandan_rl-*win_amd64.whl' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-  if ($whl) { $src = $whl.FullName } else {
-    $rels = Invoke-RestMethod 'https://api.github.com/repos/wlx7/guandan-rl/releases?per_page=10' -Headers @{ 'User-Agent' = 'guandan-installer' }
-    $asset = $rels | ForEach-Object { $_.assets } | Where-Object { $_.name -like '*win_amd64.whl' } | Select-Object -First 1
-    if (-not $asset) { throw '在 GitHub Release 中找不到 Windows 安装包' }
-    $src = Join-Path $PSScriptRoot $asset.name
-    Write-Host "下载 $($asset.browser_download_url)"
-    Invoke-WebRequest $asset.browser_download_url -OutFile $src
+  # pick the highest version among GitHub release assets and wheels already in this folder
+  $cands = @()
+  try {
+    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $rels = Invoke-RestMethod "https://api.github.com/repos/wlx7/guandan-rl/releases?per_page=20&t=$stamp" -Headers @{ 'User-Agent' = 'guandan-installer'; 'Cache-Control' = 'no-cache' }
+    foreach ($r in @($rels)) { foreach ($a in @($r.assets)) { if ($a.name -like '*win_amd64.whl') { $cands += [pscustomobject]@{ Name = $a.name; Url = $a.browser_download_url } } } }
+  } catch { Write-Host "无法访问 GitHub：$_" }
+  foreach ($f in @(Get-ChildItem -Path $PSScriptRoot -Filter 'guandan_rl-*win_amd64.whl' -ErrorAction SilentlyContinue)) { $cands += [pscustomobject]@{ Name = $f.Name; Url = $null } }
+  $best = $cands | Where-Object { $_.Name -match 'guandan_rl-(\d+\.\d+\.\d+)' } | Sort-Object { [version]([regex]::Match($_.Name, 'guandan_rl-(\d+\.\d+\.\d+)').Groups[1].Value) } -Descending | Select-Object -First 1
+  if (-not $best) { throw '找不到 Windows 安装包（guandan_rl-*-win_amd64.whl）' }
+  $src = Join-Path $PSScriptRoot $best.Name
+  if (-not (Test-Path $src)) {
+    Write-Host "下载 $($best.Url)"
+    Invoke-WebRequest $best.Url -OutFile $src
   }
   Write-Host "安装 $src"
   uv pip install --python "$py" --reinstall-package guandan-rl "$src" 2>&1 | ForEach-Object { "$_" } | Out-Host

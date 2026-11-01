@@ -1,2 +1,2 @@
 """Guandan (掼蛋) reinforcement-learning AI and LAN battle platform."""
-__version__ = "0.9.3"
+__version__ = "0.9.4"
