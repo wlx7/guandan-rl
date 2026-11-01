@@ -58,7 +58,17 @@ def cmd_info(args):
         print("  ", m["id"])
 
 
+def _utf8_stdio():
+    import sys as _s
+    for st in (_s.stdout, _s.stderr):
+        try:
+            st.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main(argv=None):
+    _utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
     ap = argparse.ArgumentParser(prog="guandan", description="掼蛋 AI：训练与对战")
     sub = ap.add_subparsers(dest="cmd")

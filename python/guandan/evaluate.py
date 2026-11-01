@@ -69,7 +69,17 @@ def evaluate(agent_a, agent_b, rounds=400, envs=64, seed=12345, max_seconds=None
     }
 
 
+def _utf8_stdio():
+    import sys as _s
+    for st in (_s.stdout, _s.stderr):
+        try:
+            st.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main():
+    _utf8_stdio()
     import argparse
     import torch
     from .model import load_checkpoint

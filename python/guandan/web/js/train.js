@@ -20,7 +20,7 @@ export function mountTrain(app) {
   const pad = (n) => String(n).padStart(2, '0');
   const form = {
     name: `run-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`,
-    preset: 'medium', base: '', device: 'auto', actor_device: 'cpu', actors: 4, envs: 64, batch: 1024,
+    preset: 'medium', base: '', device: 'auto', actor_device: 'cpu', actors: 4, envs: 64, batch: 0,
     lr: 0.0002, epsilon: 0.02, eval_interval: 10, eval_rounds: 400, max_hours: 0,
   };
   const root = h('div', { class: 'page' });
@@ -37,7 +37,7 @@ export function mountTrain(app) {
     form.preset = st.info.recommended_preset || 'medium';
     const cpu = st.info.cpu_count || 4;
     form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2)));
-    if (!st.info.device.cuda) { form.batch = 512; }
+    form.batch = st.info.device.cuda ? 2048 : 512;
     const running = st.runs.find((r) => r.status === 'running');
     st.sel = running ? running.name : (st.runs[0] && st.runs[0].name) || null;
     renderForm();

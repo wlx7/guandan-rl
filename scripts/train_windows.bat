@@ -14,5 +14,5 @@ if "%HOURS%"=="" set "HOURS=0"
 set /a ACTORS=%NUMBER_OF_PROCESSORS%-4
 if %ACTORS% LSS 1 set ACTORS=1
 if %ACTORS% GTR 16 set ACTORS=16
-"%~dp0.venv\Scripts\python.exe" -m guandan.train --name %NAME% --preset %PRESET% --device auto --actors %ACTORS% --envs 64 --batch 1024 --eval-interval 900 --max-hours %HOURS%
+"%~dp0.venv\Scripts\python.exe" -m guandan.train --name %NAME% --preset %PRESET% --device auto --actors %ACTORS% --envs 64 --eval-interval 900 --max-hours %HOURS%
 pause

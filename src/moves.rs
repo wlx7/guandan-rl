@@ -700,6 +700,16 @@ mod tests {
                     cl
                 );
             }
+            // following is complete relative to leading generation
+            for prev in moves.iter().step_by(7) {
+                let foll = legal_moves(&hand, level, Some(prev));
+                for m in moves.iter().filter(|m| m.beats(prev)) {
+                    assert!(
+                        foll.iter().any(|f| f.kind == m.kind && f.key == m.key && f.cards.len() == m.cards.len()),
+                        "missing follow move {:?} over {:?}", m, prev
+                    );
+                }
+            }
             // following: every generated move beats prev
             let prev = &moves[(trial * 7) % moves.len()];
             let foll = legal_moves(&hand, level, Some(prev));

@@ -21,7 +21,8 @@ export function mountTable(app) {
   const soundBtn = h('button', { class: 'btn small icon' + (sound.enabled ? '' : ' muted'), title: '音效开关', 'aria-label': '音效开关', onclick: () => { sound.toggle(); soundBtn.textContent = soundLabel(); soundBtn.classList.toggle('muted', !sound.enabled); } }, soundLabel());
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
-  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, soundBtn);
+  const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
+  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, helpBtn, soundBtn);
   const board = h('div', { class: 'board' });
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
   const zoneEls = DIR.map((d) => h('div', { class: `zone ${d}` }));
@@ -684,6 +685,27 @@ export function mountTable(app) {
   S.raf = requestAnimationFrame(tick);
 
   // ------------------------------------------------------------ misc
+  function showHelp() {
+    const lv = S.s ? RANKS[S.s.level] : '2';
+    const row = (a, b) => h('div', { class: 'result-row', style: { gridTemplateColumns: '6em 1fr' } }, h('span', { class: 'pl' }, a), h('span', { class: 'rd', style: { color: 'var(--text)' } }, b));
+    const box = h('div', {},
+      h('h2', {}, '规则速查'),
+      h('div', { class: 'sub' }, `本局打 ${lv}：${lv} 排在 A 之上，红桃 ${lv} 是逢人配，可以当除王以外的任何牌`),
+      h('div', { class: 'result-list' },
+        row('单张对子', '大王 > 小王 > 级牌 > A > K … > 2'),
+        row('三带二', '三张同点带一对，比三张的大小'),
+        row('顺子', '正好 5 张，A2345 最小、10JQKA 最大'),
+        row('三连对', '3 个连续对子，如 334455'),
+        row('钢板', '2 个连续三张，如 333444'),
+        row('炸弹', '天王炸 > 6 张以上炸弹 > 同花顺 > 5 张炸弹 > 4 张炸弹'),
+        row('接风', '出完最后一手牌没人要时，由队友接着出'),
+        row('升级', '双上升 3 级，队友三游升 2 级，队友末游升 1 级')),
+      h('div', { class: 'sub', style: { marginTop: '14px', textAlign: 'left' } },
+        '操作：点牌或按住拖动选牌，双击选中同点数的一列，右键清空。回车出牌，空格不出，Esc 取消选择。'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, '知道了')));
+    const m = modal(box, { onClose: () => {} });
+  }
+
   function leave() {
     const box = h('div', {}, h('h2', {}, '离开牌桌？'), h('div', { class: 'sub' }, '牌桌会继续进行。之后可以从首页回到牌桌。'));
     let m;

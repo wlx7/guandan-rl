@@ -43,16 +43,16 @@ def build_parser():
     _cpu = os.cpu_count() or 2
     ap.add_argument("--actors", type=int, default=max(1, min(16, _cpu - (4 if _cpu >= 12 else 2))))
     ap.add_argument("--envs", type=int, default=64, help="parallel matches per actor")
-    ap.add_argument("--batch", type=int, default=1024)
+    ap.add_argument("--batch", type=int, default=0, help="0 = auto (2048 on GPU, 512 on CPU)")
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--epsilon", type=float, default=0.02)
-    ap.add_argument("--reuse", type=float, default=2.0, help="average times each sample is trained on")
+    ap.add_argument("--reuse", type=float, default=1.0, help="average times each sample is trained on")
     ap.add_argument("--buffer", type=int, default=200_000)
     ap.add_argument("--save-interval", type=float, default=300, help="seconds between checkpoints")
     ap.add_argument("--snapshot-interval", type=float, default=3600, help="seconds between kept snapshots")
     ap.add_argument("--eval-interval", type=float, default=600, help="seconds between evaluations")
     ap.add_argument("--eval-rounds", type=int, default=400)
-    ap.add_argument("--eval-threads", type=int, default=2)
+    ap.add_argument("--eval-threads", type=int, default=1)
     ap.add_argument("--total-frames", type=float, default=0, help="stop after this many samples (0 = no limit)")
     ap.add_argument("--max-hours", type=float, default=0, help="stop after this many hours (0 = no limit)")
     ap.add_argument("--seed", type=int, default=0)
@@ -60,10 +60,32 @@ def build_parser():
     return ap
 
 
+def set_priority(level: str):
+    """'low' for actors/evaluator so the learner always gets CPU time; 'high' for the learner."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            cls = {"low": 0x4000, "high": 0x8000}[level]  # BELOW_NORMAL / ABOVE_NORMAL
+            k = ctypes.windll.kernel32
+            k.SetPriorityClass(k.GetCurrentProcess(), cls)
+        elif level == "low":
+            os.nice(5)
+    except Exception:
+        pass
+
+
+def unpack_bits(x: torch.Tensor, n: int) -> torch.Tensor:
+    """Inverse of np.packbits (big bit order) on any device: uint8 [B, nb] -> uint8 [B, n]."""
+    shifts = torch.arange(7, -1, -1, device=x.device, dtype=torch.uint8)
+    bits = (x.unsqueeze(-1) >> shifts) & 1
+    return bits.reshape(x.shape[0], -1)[:, :n]
+
+
 # ----------------------------------------------------------------------------- actors
 
 def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
     try:
+        set_priority("low")
         torch.set_num_threads(1)
         torch.set_grad_enabled(False)
         dev = args["actor_device"]
@@ -110,6 +132,7 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
 def evaluator_main(run_dir: str, args: dict, stop):
     try:
         from .evaluate import evaluate
+        set_priority("low")
         torch.set_num_threads(max(1, args["eval_threads"]))
         torch.set_grad_enabled(False)
         ckpt = os.path.join(run_dir, "ckpt_latest.pt")
@@ -160,30 +183,39 @@ def evaluator_main(run_dir: str, args: dict, stop):
 # ----------------------------------------------------------------------------- learner
 
 class Replay:
-    def __init__(self, cap):
+    """Bit-packed replay buffer that lives on the learner device (GPU memory when available)."""
+
+    def __init__(self, cap, device):
         self.cap = cap
-        self.s = np.zeros((cap, (STATE_DIM + 7) // 8), np.uint8)
-        self.h = np.zeros((cap, (H_FLAT + 7) // 8), np.uint8)
-        self.a = np.zeros((cap, (ACTION_DIM + 7) // 8), np.uint8)
-        self.t = np.zeros(cap, np.float32)
+        self.device = device
+        self.s = torch.zeros((cap, (STATE_DIM + 7) // 8), dtype=torch.uint8, device=device)
+        self.h = torch.zeros((cap, (H_FLAT + 7) // 8), dtype=torch.uint8, device=device)
+        self.a = torch.zeros((cap, (ACTION_DIM + 7) // 8), dtype=torch.uint8, device=device)
+        self.t = torch.zeros(cap, dtype=torch.float32, device=device)
         self.pos = 0
         self.size = 0
 
     def add(self, s, h, a, t):
         n = len(t)
-        idx = (np.arange(n) + self.pos) % self.cap
-        self.s[idx] = s
-        self.h[idx] = h
-        self.a[idx] = a
-        self.t[idx] = t
+        idx = (torch.arange(n, device=self.device) + self.pos) % self.cap
+        self.s[idx] = torch.from_numpy(s).to(self.device)
+        self.h[idx] = torch.from_numpy(h).to(self.device)
+        self.a[idx] = torch.from_numpy(a).to(self.device)
+        self.t[idx] = torch.from_numpy(t).to(self.device)
         self.pos = (self.pos + n) % self.cap
         self.size = min(self.cap, self.size + n)
 
-    def sample(self, b, rng):
-        idx = rng.integers(0, self.size, b)
-        s = np.unpackbits(self.s[idx], axis=1, count=STATE_DIM)
-        h = np.unpackbits(self.h[idx], axis=1, count=H_FLAT).reshape(b, HIST_LEN, HIST_DIM)
-        a = np.unpackbits(self.a[idx], axis=1, count=ACTION_DIM)
+    def sample(self, b):
+        idx = torch.randint(0, self.size, (b,), device=self.device)
+        if self.device == "cpu":  # numpy is faster than torch bit ops on CPU
+            ii = idx.numpy()
+            s = torch.from_numpy(np.unpackbits(self.s.numpy()[ii], axis=1, count=STATE_DIM)).float()
+            h = torch.from_numpy(np.unpackbits(self.h.numpy()[ii], axis=1, count=H_FLAT)).view(b, HIST_LEN, HIST_DIM).float()
+            a = torch.from_numpy(np.unpackbits(self.a.numpy()[ii], axis=1, count=ACTION_DIM)).float()
+            return s, h, a, self.t[idx]
+        s = unpack_bits(self.s[idx], STATE_DIM).float()
+        h = unpack_bits(self.h[idx], H_FLAT).view(b, HIST_LEN, HIST_DIM).float()
+        a = unpack_bits(self.a[idx], ACTION_DIM).float()
         return s, h, a, self.t[idx]
 
 
@@ -202,6 +234,11 @@ def run(args):
     device = args.device
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    if not args.batch:
+        args.batch = 2048 if device.startswith("cuda") else 512
+    # avoid OpenMP oversubscription: actors already keep every core busy
+    spare = (os.cpu_count() or 2) - args.actors - args.eval_threads
+    torch.set_num_threads(2 if device.startswith("cuda") else max(1, min(4, spare)))
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
 
@@ -267,7 +304,10 @@ def run(args):
         if snapshot:
             save_checkpoint(os.path.join(run_dir, f"model_{frames // 1000}k.pt"), model, meta, half=True)
 
-    buf = Replay(args.buffer)
+    if device.startswith("cuda"):
+        set_priority("high")
+    buf = Replay(args.buffer, device)
+    busy = 0.0
     received = 0
     trained = 0
     rounds = 0
@@ -321,12 +361,9 @@ def run(args):
                     break
             # ---- train
             budget = 0
+            tb = time.time()
             while buf.size >= args.batch * 4 and trained < received * args.reuse and budget < 50:
-                s, h, a, t = buf.sample(args.batch, rng)
-                st = torch.from_numpy(s).to(device, non_blocking=True).float()
-                ht = torch.from_numpy(h).to(device, non_blocking=True).float()
-                at = torch.from_numpy(a).to(device, non_blocking=True).float()
-                tt = torch.from_numpy(t).to(device)
+                st, ht, at, tt = buf.sample(args.batch)
                 with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
                     pred = model(st, ht, at)
                 loss = torch.nn.functional.mse_loss(pred.float(), tt)
@@ -347,6 +384,8 @@ def run(args):
                             ps.copy_(pm.detach().cpu())
                     version.value += 1
             now = time.time()
+            if budget:
+                busy += now - tb
             train_seconds += now - t_seg
             t_seg = now
             # ---- log
@@ -357,13 +396,16 @@ def run(args):
                        "rounds_per_sec": (rounds - rounds_at_log) / dt,
                        "loss": loss_acc / max(1, loss_n), "updates": n_updates,
                        "buffer": buf.size, "train_seconds": train_seconds,
+                       "learner_busy": busy / dt,
                        "alive": sum(p.is_alive() for p in procs[:-1])}
                 log_line(metrics, row)
                 print(f"[train] frames={frames:,} fps={row['fps']:.0f} loss={row['loss']:.4f} "
-                      f"rounds/s={row['rounds_per_sec']:.1f} buffer={buf.size}", flush=True)
+                      f"rounds/s={row['rounds_per_sec']:.1f} learner={row['learner_busy']*100:.0f}% "
+                      f"updates={n_updates}", flush=True)
                 frames_at_log = frames
                 rounds_at_log = rounds
                 loss_acc, loss_n = 0.0, 0
+                busy = 0.0
                 t_last_log = now
                 if row["alive"] == 0 and args.actors > 0:
                     stop_reason = "actors died"
@@ -400,7 +442,17 @@ def run(args):
                 p.terminate()
 
 
+def _utf8_stdio():
+    import sys as _s
+    for st in (_s.stdout, _s.stderr):
+        try:
+            st.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def main(argv=None):
+    _utf8_stdio()
     args = build_parser().parse_args(argv)
     run(args)
 
