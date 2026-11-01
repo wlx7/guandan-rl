@@ -34,7 +34,9 @@
    - 安装本程序（含训练好的模型）。
 3. 双击 `start_windows.bat`，浏览器会自动打开 `http://127.0.0.1:8000`。
 
-第一次启动时 Windows 防火墙会询问是否允许 Python 访问网络，请勾选“专用网络”，局域网里的其他设备才能连进来。
+第一次启动时 Windows 防火墙会询问是否允许 Python 访问网络，请勾选“专用网络”，局域网里的其他设备才能连进来。从网上下载的 `.bat` 如果被 SmartScreen 拦下，点“更多信息 → 仍要运行”。
+
+安装时的输出保存在 `install_log.txt`。以后有新版本，再双击一次 `install_windows.bat` 即可升级（已装好的 PyTorch 会被跳过）。
 
 ### Linux / macOS
 

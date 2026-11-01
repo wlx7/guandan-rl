@@ -533,6 +533,79 @@ mod tests {
         }
     }
 
+    fn setup_endgame(banker: i8, levels: [u8; 2], level: u8) -> Game {
+        let mut g = Game::new(9, Rules::default());
+        g.phase = Phase::Play;
+        g.hands = [[0; 54]; 4];
+        g.team_level = levels;
+        g.banker = banker;
+        g.level = level;
+        g.finished.clear();
+        g.last_move = None;
+        g.current = 0;
+        g.hands[0][ctype(3, 0) as usize] = 1; // one card each for the 0/2 team
+        g.hands[2][ctype(4, 0) as usize] = 1;
+        g.hands[1][ctype(1, 0) as usize] = 2;
+        g.hands[3][ctype(1, 2) as usize] = 2;
+        g
+    }
+
+    fn double_win(g: &mut Game) {
+        // seat 0 goes out, everybody passes, partner (2) gets the lead via 接风 and goes out too
+        g.apply(&Move::new(Kind::Single, strength(3, g.level), vec![ctype(3, 0)])).unwrap();
+        for _ in 0..3 {
+            g.apply(&Move::pass()).unwrap();
+        }
+        assert_eq!(g.current, 2);
+        g.apply(&Move::new(Kind::Single, strength(4, g.level), vec![ctype(4, 0)])).unwrap();
+    }
+
+    #[test]
+    fn double_win_upgrades_three_levels() {
+        let mut g = setup_endgame(0, [5, 7], 5);
+        double_win(&mut g);
+        assert_eq!(g.phase, Phase::RoundOver);
+        let r = g.last_result.clone().unwrap();
+        assert_eq!((r.win_team, r.gain), (0, 3));
+        assert_eq!(g.team_level, [8, 7]);
+        assert_eq!(g.banker, 0);
+    }
+
+    #[test]
+    fn passing_a_wins_the_match() {
+        let mut g = setup_endgame(0, [ACE, 9], ACE);
+        double_win(&mut g);
+        assert_eq!(g.phase, Phase::MatchOver);
+        assert_eq!(g.winner, 0);
+    }
+
+    #[test]
+    fn not_banker_at_a_does_not_win_match() {
+        // team 0 is at A but the round is played at team 1's level
+        let mut g = setup_endgame(1, [ACE, 9], 9);
+        double_win(&mut g);
+        assert_eq!(g.phase, Phase::RoundOver);
+        assert_eq!(g.banker, 0);
+        assert_eq!(g.team_level, [ACE, 9]);
+    }
+
+    #[test]
+    fn three_failed_a_attempts_reset_to_two() {
+        for fails_before in 0..3u8 {
+            // team 1 is the banker at A; team 0 wins the round -> failure for team 1
+            let mut g = setup_endgame(1, [3, ACE], ACE);
+            g.a_fail = [0, fails_before];
+            double_win(&mut g);
+            if fails_before < 2 {
+                assert_eq!(g.a_fail[1], fails_before + 1);
+                assert_eq!(g.team_level[1], ACE);
+            } else {
+                assert_eq!(g.a_fail[1], 0);
+                assert_eq!(g.team_level[1], 0, "back to 2 after the third failure");
+            }
+        }
+    }
+
     #[test]
     fn jiefeng() {
         // Construct: player 0 plays last card, everybody passes -> partner (2) leads.
