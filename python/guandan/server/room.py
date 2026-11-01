@@ -130,11 +130,18 @@ class Room:
                       for s in self.seats],
         }
 
+    def fill_ai(self):
+        for s in self.seats:
+            if s.kind == "human" and not s.taken:
+                s.kind = "ai"
+                s.model = self.hint_model
+                s.name = f"AI {'南东北西'[s.index]}"
+
     def maybe_start(self):
         if self.status == "waiting" and all(s.taken and s.connected for s in self.human_seats()):
             self.status = "playing"
             self.event = {"type": "deal"}
-            self.task = asyncio.get_event_loop().create_task(self.loop())
+            self.task = asyncio.get_running_loop().create_task(self.loop())
             return True
         return False
 

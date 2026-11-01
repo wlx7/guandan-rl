@@ -16,8 +16,9 @@ export function mountTable(app) {
   };
 
   // ------------------------------------------------------------ skeleton
-  const backBtn = h('button', { class: 'btn small icon', title: '离开牌桌', onclick: leave }, '离开');
-  const soundBtn = h('button', { class: 'btn small icon', title: '音效', onclick: () => { sound.toggle(); soundBtn.textContent = sound.enabled ? '音效开' : '音效关'; } }, sound.enabled ? '音效开' : '音效关');
+  const backBtn = h('button', { class: 'btn small icon', title: '离开牌桌', 'aria-label': '离开牌桌', onclick: leave }, '离开');
+  const soundLabel = () => (sound.enabled ? '♪' : '♪̸');
+  const soundBtn = h('button', { class: 'btn small icon' + (sound.enabled ? '' : ' muted'), title: '音效开关', 'aria-label': '音效开关', onclick: () => { sound.toggle(); soundBtn.textContent = soundLabel(); soundBtn.classList.toggle('muted', !sound.enabled); } }, soundLabel());
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
   const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, soundBtn);
@@ -192,7 +193,10 @@ export function mountTable(app) {
       h('div', { class: 'wait-grid' },
         h('div', {}, h('p', { class: 'muted', style: { marginTop: 0 } }, '让朋友连接同一个 WiFi，用手机或电脑浏览器打开：'),
           h('div', { class: 'url-big', id: 'lanurl' }, '…'), list),
-        h('div', { class: 'qr', id: 'qrbox' })));
+        h('div', { class: 'qr', id: 'qrbox' })),
+      h('div', { style: { marginTop: '14px', display: 'flex', gap: '10px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai').catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始'),
+        h('button', { class: 'btn small', onclick: () => { location.hash = '#/'; } }, '返回首页')));
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
     api.get('/api/info').then((info) => {
@@ -208,7 +212,9 @@ export function mountTable(app) {
   function ringSvg() {
     const r = 30;
     const c = 2 * Math.PI * r;
-    return h('svg', { class: 'ring', viewBox: '0 0 66 66', html: `<circle class="bg" cx="33" cy="33" r="${r}"/><circle class="fg" cx="33" cy="33" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="0"/>` });
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<svg class="ring" viewBox="0 0 66 66" aria-hidden="true"><circle class="bg" cx="33" cy="33" r="${r}"/><circle class="fg" cx="33" cy="33" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="0"/></svg>`;
+    return wrap.firstChild;
   }
 
   function renderSeats() {

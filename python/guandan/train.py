@@ -40,7 +40,8 @@ def build_parser():
     ap.add_argument("--base", default="", help="checkpoint to start from (基准模型)")
     ap.add_argument("--device", default="auto", help="learner device: auto|cuda|cpu")
     ap.add_argument("--actor-device", default="cpu", help="device for actors: cpu|cuda")
-    ap.add_argument("--actors", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 2)))
+    _cpu = os.cpu_count() or 2
+    ap.add_argument("--actors", type=int, default=max(1, min(16, _cpu - (4 if _cpu >= 12 else 2))))
     ap.add_argument("--envs", type=int, default=64, help="parallel matches per actor")
     ap.add_argument("--batch", type=int, default=1024)
     ap.add_argument("--lr", type=float, default=2e-4)

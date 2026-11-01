@@ -63,7 +63,7 @@ async function viewHome() {
 
 // ---------------------------------------------------------------- setup
 async function viewSetup() {
-  const cfg = { mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '我' };
+  const cfg = { mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
   let models = [];
   let room = null;
   try { [models, room] = await Promise.all([api.get('/api/models'), api.get('/api/room')]); } catch (e) { toast(e.message, 'err'); }

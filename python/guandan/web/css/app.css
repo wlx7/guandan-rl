@@ -215,7 +215,8 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .topbar { display: flex; align-items: center; gap: 10px; padding: 8px max(12px, env(safe-area-inset-left)) 6px; background: linear-gradient(180deg, rgba(0, 0, 0, 0.35), transparent); z-index: 5; }
 .topbar .grow { flex: 1; display: flex; justify-content: center; }
 .lvbox { display: flex; align-items: center; gap: 10px; }
-.teamlv { display: grid; text-align: center; font-size: 11px; color: var(--text-2); line-height: 1.1; }
+.teamlv { display: grid; text-align: center; font-size: 11px; color: var(--text-2); line-height: 1.1; white-space: nowrap; }
+.btn.icon.muted { opacity: 0.5; text-decoration: line-through; }
 .teamlv b { font-family: var(--num); font-size: 22px; color: var(--text); }
 .teamlv.ours b { color: var(--brass-hi); }
 .teamlv.banker::after { content: "庄"; font-family: var(--serif); font-size: 10px; color: #2a1f08; background: var(--brass); border-radius: 3px; padding: 0 3px; margin: 2px auto 0; }
@@ -227,7 +228,7 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 }
 .plaque .big { font-family: var(--serif); font-weight: 900; font-size: 26px; letter-spacing: 0.12em; line-height: 1; }
 .plaque .big .n { font-family: var(--num); letter-spacing: 0; }
-.plaque .sub { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.8; margin-top: 2px; }
+.plaque .sub { font-size: 10.5px; letter-spacing: 0.04em; opacity: 0.8; margin-top: 2px; white-space: nowrap; }
 .plaque.pulse { animation: plaquepulse 1.2s ease-out 1; }
 @keyframes plaquepulse { 30% { transform: scale(1.12); } }
 .meta { font-size: 12px; color: var(--text-2); text-align: right; line-height: 1.35; }
@@ -403,7 +404,10 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .plaque { min-width: 78px; padding: 4px 10px; }
   .plaque .big { font-size: 21px; }
   .teamlv b { font-size: 18px; }
-  .meta { font-size: 11px; }
+  .meta { font-size: 10.5px; }
+  .plaque .sub { font-size: 9px; letter-spacing: 0; }
+  .topbar { gap: 6px; }
+  .lvbox { gap: 6px; }
   .seat-chip { width: 120px; padding: 6px; }
   .mini-hand { max-width: 160px; }
   .seat.left .mini-hand, .seat.right .mini-hand { max-width: 90px; }

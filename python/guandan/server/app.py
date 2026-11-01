@@ -180,7 +180,7 @@ def api_room_create(body: dict):
     token = None
     seat = None
     if room.human_seats():
-        seat, token = room.join(0 if seats[0]["kind"] == "human" else None, body.get("name") or "我")
+        seat, token = room.join(0 if seats[0]["kind"] == "human" else None, body.get("name") or "房主")
     return {"room": room.id, "seat": seat, "token": token}
 
 
@@ -196,6 +196,17 @@ def api_room_join(body: dict):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"room": r.id, "seat": seat, "token": token}
+
+
+@app.post("/api/room/fill_ai")
+async def api_room_fill_ai():
+    r: Room | None = STATE["room"]
+    if r is None or r.closed or r.status != "waiting":
+        raise HTTPException(400, "牌桌已经开始或不存在")
+    r.fill_ai()
+    r.maybe_start()
+    await r.broadcast()
+    return {"ok": True}
 
 
 @app.post("/api/room/close")

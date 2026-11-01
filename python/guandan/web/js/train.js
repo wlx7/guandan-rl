@@ -35,7 +35,8 @@ export function mountTrain(app) {
       [st.info, st.models, st.runs] = await Promise.all([api.get('/api/info'), api.get('/api/models'), api.get('/api/train/runs')]);
     } catch (e) { toast(e.message, 'err'); return; }
     form.preset = st.info.recommended_preset || 'medium';
-    form.actors = Math.max(1, Math.min(12, (st.info.cpu_count || 4) - 2));
+    const cpu = st.info.cpu_count || 4;
+    form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2)));
     if (!st.info.device.cuda) { form.batch = 512; }
     const running = st.runs.find((r) => r.status === 'running');
     st.sel = running ? running.name : (st.runs[0] && st.runs[0].name) || null;
@@ -77,7 +78,7 @@ export function mountTrain(app) {
           h('div', { class: 'field' }, h('label', {}, '自对弈设备'), actDevSel)),
         h('div', { class: 'hint dim', style: { fontSize: '12px' } }, dev.cuda ? `检测到 ${dev.gpu}（${dev.gpu_mem_gb} GB），CPU ${info.cpu_count} 线程` : `未检测到 CUDA，将使用 CPU（${info.cpu_count} 线程）`),
         h('div', { class: 'grid2' },
-          h('div', { class: 'field' }, h('label', {}, '自对弈进程数'), num('actors', { min: 1, max: 64 }), h('span', { class: 'hint' }, `推荐 ${Math.max(1, (info.cpu_count || 4) - 2)}（线程数减 2）`)),
+          h('div', { class: 'field' }, h('label', {}, '自对弈进程数'), num('actors', { min: 1, max: 64 }), h('span', { class: 'hint' }, `推荐 ${Math.max(1, Math.min(16, (info.cpu_count || 4) - ((info.cpu_count || 4) >= 12 ? 4 : 2)))}（留几个线程给学习和评估）`)),
           h('div', { class: 'field' }, h('label', {}, '每进程并行对局'), num('envs', { min: 1, max: 512 }))),
         h('details', {}, h('summary', {}, '更多参数'),
           h('div', { class: 'grid2', style: { marginTop: '8px' } },
