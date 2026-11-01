@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..paths import list_models, resolve_model, default_model, home
 from . import trainer
+from ..proc import resource_limits
 from .room import Room
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
@@ -80,6 +81,8 @@ def api_info():
         "recommended_preset": RECOMMENDED_PRESET,
         "default_model": default_model(),
         "cpu_count": os.cpu_count(),
+        "limits": {"cuda": resource_limits("cuda"), "cpu": resource_limits("cpu")},
+        "active_runs": trainer.active_runs(),
     }
 
 
@@ -124,10 +127,13 @@ def api_train_start(opts: dict):
 @app.post("/api/train/stop")
 def api_train_stop(body: dict):
     try:
-        trainer.stop_run(body["name"])
+        if body.get("force"):
+            trainer.force_stop(body["name"])
+            return {"ok": True, "forced": True}
+        r = trainer.stop_run(body["name"])
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True}
+    return dict(r, ok=True)
 
 
 @app.get("/api/train/metrics")

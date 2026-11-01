@@ -56,6 +56,7 @@ def build_parser():
     ap.add_argument("--max-hours", type=float, default=0, help="stop after this many hours (0 = no limit)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-amp", action="store_true", help="disable mixed precision on GPU")
+    ap.add_argument("--force", action="store_true", help="start even if another training is running")
     return ap
 
 
@@ -225,9 +226,29 @@ def log_line(path, row):
         f.write(json.dumps(row) + "\n")
 
 
+def other_active_runs(exclude=None):
+    from .proc import run_alive
+    out = []
+    for d in sorted(os.listdir(runs_dir())):
+        p = os.path.join(runs_dir(), d)
+        if d != exclude and os.path.isdir(p) and run_alive(p):
+            out.append(d)
+    return out
+
+
 def run(args):
+    from .proc import run_alive, write_pid, remove_pid, resource_limits
     run_dir = os.path.join(runs_dir(), args.name)
     os.makedirs(run_dir, exist_ok=True)
+    if run_alive(run_dir):
+        print(f"training '{args.name}' is already running (pid file in {run_dir})", flush=True)
+        sys.exit(2)
+    others = other_active_runs(args.name)
+    if others and not args.force:
+        print(f"another training is running: {', '.join(others)}. Stop it first "
+              f"(two trainings do not fit into GPU memory / RAM), or pass --force.", flush=True)
+        sys.exit(3)
+    write_pid(run_dir)
     stop_file = os.path.join(run_dir, "STOP")
     if os.path.exists(stop_file):
         os.remove(stop_file)
@@ -246,6 +267,14 @@ def run(args):
         args.envs = 256 if args.actor_device == "cuda" else 64
     if not args.batch:
         args.batch = 2048 if device.startswith("cuda") else 512
+    lim = resource_limits(args.actor_device)
+    if args.actors > lim["max_actors"]:
+        print(f"actors {args.actors} -> {lim['max_actors']} (limited by GPU memory / RAM)", flush=True)
+        args.actors = lim["max_actors"]
+    if args.actors * args.envs > lim["max_total_envs"]:
+        new_envs = max(16, lim["max_total_envs"] // args.actors)
+        print(f"envs per actor {args.envs} -> {new_envs} (memory limit)", flush=True)
+        args.envs = new_envs
     # avoid OpenMP oversubscription: actors already keep every core busy
     spare = (os.cpu_count() or 2) - args.actors - args.eval_threads
     torch.set_num_threads(2 if device.startswith("cuda") else max(1, min(4, spare)))
@@ -417,6 +446,9 @@ def run(args):
                 loss_acc, loss_n = 0.0, 0
                 busy = 0.0
                 t_last_log = now
+                if received == 0 and now - t_start > 240:
+                    stop_reason = "no self-play data after 4 minutes (out of GPU memory or RAM?)"
+                    break
                 if row["alive"] == 0 and args.actors > 0:
                     stop_reason = "actors died"
                     break
@@ -436,6 +468,7 @@ def run(args):
                 stop_reason = "reached time limit"
                 break
     finally:
+        remove_pid(run_dir)
         stop.set()
         save(snapshot=True)
         log_line(metrics, {"type": "stop", "t": time.time(), "frames": frames, "reason": stop_reason})

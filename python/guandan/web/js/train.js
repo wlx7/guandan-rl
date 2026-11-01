@@ -15,7 +15,7 @@ function fmtDur(s) {
 }
 
 export function mountTrain(app) {
-  const st = { info: null, models: [], runs: [], sel: null, rows: [], since: 0, timer: 0, charts: {}, closed: false, logOpen: false };
+  const st = { info: null, models: [], runs: [], sel: null, rows: [], since: 0, timer: 0, charts: {}, closed: false, logOpen: false, stopping: {} };
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const form = {
@@ -64,7 +64,7 @@ export function mountTrain(app) {
     for (const m of st.models) baseSel.appendChild(h('option', { value: m.id, selected: form.base === m.id }, `${m.source}：${m.id.split('/').slice(-1)[0]}`));
     const devSel = h('select', { onchange: (e) => { form.device = e.target.value; } },
       ...[['auto', '自动'], ['cuda', 'GPU (CUDA)'], ['cpu', 'CPU']].map(([v, t]) => h('option', { value: v, selected: form.device === v }, t)));
-    const actDevSel = h('select', { onchange: (e) => { form.actor_device = e.target.value; } },
+    const actDevSel = h('select', { onchange: (e) => { form.actor_device = e.target.value; clampForm(); renderForm(); } },
       ...[['cuda', 'GPU（有显卡时推荐）'], ['cpu', 'CPU（多进程）']].map(([v, t]) => h('option', { value: v, selected: form.actor_device === v }, t)));
     left.replaceChildren(
       h('h2', {}, '新建训练'),
@@ -80,7 +80,8 @@ export function mountTrain(app) {
         h('div', { class: 'hint dim', style: { fontSize: '12px' } }, dev.cuda ? `检测到 ${dev.gpu}（${dev.gpu_mem_gb} GB），CPU ${info.cpu_count} 线程` : `未检测到 CUDA，将使用 CPU（${info.cpu_count} 线程）`),
         h('div', { class: 'grid2' },
           h('div', { class: 'field' }, h('label', {}, '自对弈进程数'), num('actors', { min: 1, max: 64 }), h('span', { class: 'hint' }, dev.cuda ? '推荐：GPU 自对弈 3 个进程 × 256 局' : `推荐 ${Math.max(1, Math.min(16, (info.cpu_count || 4) - ((info.cpu_count || 4) >= 12 ? 4 : 2)))}（留几个线程给学习和评估）`)),
-          h('div', { class: 'field' }, h('label', {}, '每进程并行对局'), num('envs', { min: 1, max: 512 }))),
+          h('div', { class: 'field' }, h('label', {}, '每进程并行对局'), num('envs', { min: 1, max: 512 }),
+            h('span', { class: 'hint' }, `本机上限：${limitsFor(form.actor_device).max_actors} 个进程，合计 ${limitsFor(form.actor_device).max_total_envs} 局`))),
         h('details', {}, h('summary', {}, '更多参数'),
           h('div', { class: 'grid2', style: { marginTop: '8px' } },
             h('div', { class: 'field' }, h('label', {}, '批大小'), num('batch', { min: 64, step: 64 })),
@@ -89,11 +90,36 @@ export function mountTrain(app) {
             h('div', { class: 'field' }, h('label', {}, '评估间隔（分钟）'), num('eval_interval', { min: 1 })),
             h('div', { class: 'field' }, h('label', {}, '每次评估局数'), num('eval_rounds', { min: 50, step: 50 })),
             h('div', { class: 'field' }, h('label', {}, '最长训练（小时，0 不限）'), num('max_hours', { min: 0, step: 0.5 })))),
-        h('button', { class: 'btn primary', onclick: startRun }, '开始训练'),
+        busyRun() ? h('div', { class: 'hint', style: { fontSize: '12.5px', color: 'var(--brass-hi)' } }, `训练「${busyRun()}」正在运行。显卡和内存只够同时跑一个训练，要开新训练请先停止它。`) : null,
+        h('button', { class: 'btn primary', onclick: startRun, disabled: !!busyRun() }, '开始训练'),
       ));
   }
 
+  function busyRun() {
+    const r = st.runs.find((x) => x.status === 'running');
+    return r ? r.name : null;
+  }
+
+  function limitsFor(dev) {
+    const l = (st.info.limits || {})[dev === 'cuda' ? 'cuda' : 'cpu'];
+    return l || { max_actors: 64, max_total_envs: 100000 };
+  }
+
+  function clampForm() {
+    const dev = form.actor_device === 'cuda' ? 'cuda' : 'cpu';
+    const lim = limitsFor(dev);
+    const msgs = [];
+    if (+form.actors > lim.max_actors) { form.actors = lim.max_actors; msgs.push(`自对弈进程数已限制为 ${lim.max_actors}`); }
+    if (+form.actors * +form.envs > lim.max_total_envs) {
+      form.envs = Math.max(16, Math.floor(lim.max_total_envs / form.actors));
+      msgs.push(`每进程并行对局已限制为 ${form.envs}`);
+    }
+    return msgs;
+  }
+
   async function startRun() {
+    const msgs = clampForm();
+    if (msgs.length) { renderForm(); toast(`${msgs.join('，')}（受显存和内存限制）`); }
     const body = { ...form, eval_interval: Math.round((+form.eval_interval || 10) * 60) };
     if (!body.base) delete body.base;
     try {
@@ -127,8 +153,8 @@ export function mountTrain(app) {
       h('span', { class: 'tag ' + (running ? 'on' : 'off') }, running ? '训练中' : '已停止'),
       h('span', { class: 'dim', style: { fontSize: '13px' } }, `${run.preset || ''} ${run.params ? (run.params / 1e6).toFixed(2) + 'M 参数' : ''} ${run.device ? '· ' + run.device : ''}`),
       h('span', { class: 'spacer', style: { flex: 1 } }),
-      running ? h('button', { class: 'btn small danger', onclick: () => stopRun(run.name) }, '停止训练')
-        : h('button', { class: 'btn small', onclick: () => resumeRun(run) }, '继续训练'));
+      running ? stopButtons(run)
+        : h('button', { class: 'btn small', onclick: () => resumeRun(run), disabled: !!busyRun() }, '继续训练'));
     const statsBox = h('div', { class: 'stats', id: 'stats' });
     const charts = h('div', { class: 'charts' });
     st.charts = {};
@@ -148,22 +174,44 @@ export function mountTrain(app) {
     mk('fps', '自对弈速度（样本/秒）', null, false, { yFormat: (v) => fmtFrames(v) });
     mk('rps', '每秒完成对局数', null, false, { yFormat: (v) => v.toFixed(0) });
     const evalTable = h('div', { id: 'evaltable' });
-    const ck = h('div', { class: 'ckpts' });
+    const ck = h('div', { class: 'result-list' });
     for (const f of run.checkpoints || []) {
-      ck.appendChild(h('button', { class: 'btn small', title: '复制到模型库，可在对战中选择', onclick: () => exportModel(run.name, f) }, `${f} 加入模型库`));
+      const what = f === 'model.pt' ? '最新模型，每 5 分钟自动保存。开桌时在“AI 模型”里选「训练 ' + run.name + '：model.pt」即可用它对战'
+        : `第 ${f.replace('model_', '').replace('k.pt', '')} 千样本时的快照（每小时保留一份，可用来比较不同阶段的水平）`;
+      ck.appendChild(h('div', { class: 'result-row', style: { gridTemplateColumns: 'minmax(8em, auto) 1fr auto' } },
+        h('span', { class: 'pl', style: { fontFamily: 'var(--num)', fontWeight: 600 } }, f),
+        h('span', { class: 'rd', style: { color: 'var(--text-2)' } }, what),
+        h('button', { class: 'btn small', title: '复制到模型库并起个名字', onclick: () => exportModel(run.name, f) }, '加入模型库')));
     }
     const log = h('pre', { class: 'log', id: 'trainlog' }, '');
     const det = h('details', { open: st.logOpen, ontoggle: (e) => { st.logOpen = e.target.open; if (st.logOpen) loadLog(); } }, h('summary', {}, '训练日志'), log);
     right.replaceChildren(tabs, head, statsBox, charts,
       h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '评估记录'), evalTable,
-      h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '模型文件'),
-      ck.childNodes.length ? ck : h('div', { class: 'dim', style: { fontSize: '13px' } }, '训练开始几分钟后会自动保存。'),
+      h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '这个训练输出的模型'),
+      h('div', { class: 'dim', style: { fontSize: '12.5px', marginBottom: '8px' } }, `保存在 ${st.info.home}${st.info.home.includes('\\') ? '\\' : '/'}runs${st.info.home.includes('\\') ? '\\' : '/'}${run.name}。另有 ckpt_latest.pt（含优化器，用于“继续训练”）。`),
+      ck.childNodes.length ? ck : h('div', { class: 'dim', style: { fontSize: '13px' } }, '训练开始约 5 分钟后会自动保存第一个模型。'),
       det);
     drawAll();
   }
 
+  function stopButtons(run) {
+    const since = st.stopping[run.name];
+    if (!since) return h('button', { class: 'btn small danger', onclick: () => stopRun(run.name) }, '停止训练');
+    const waited = (Date.now() - since) / 1000;
+    return h('span', { style: { display: 'inline-flex', gap: '8px', alignItems: 'center' } },
+      h('span', { class: 'dim', style: { fontSize: '13px' } }, '正在保存并停止…'),
+      waited > 20 ? h('button', { class: 'btn small danger', onclick: () => forceStop(run.name) }, '强制结束') : null);
+  }
   async function stopRun(name) {
-    try { await api.post('/api/train/stop', { name }); toast('正在停止并保存模型…'); } catch (e) { toast(e.message, 'err'); }
+    try {
+      await api.post('/api/train/stop', { name });
+      st.stopping[name] = Date.now();
+      toast('正在保存模型并停止；1 分钟内没有响应会自动强制结束');
+      renderRuns();
+    } catch (e) { toast(e.message, 'err'); }
+  }
+  async function forceStop(name) {
+    try { await api.post('/api/train/stop', { name, force: true }); toast('已强制结束（最近一次自动保存的模型仍然可用）'); setTimeout(refreshRuns, 800); } catch (e) { toast(e.message, 'err'); }
   }
   async function resumeRun(run) {
     try {
@@ -207,8 +255,12 @@ export function mountTrain(app) {
     try {
       const runs = await api.get('/api/train/runs');
       const changed = JSON.stringify(runs.map((r) => [r.name, r.status, r.checkpoints])) !== JSON.stringify(st.runs.map((r) => [r.name, r.status, r.checkpoints]));
+      const wasBusy = busyRun();
       st.runs = runs;
+      for (const r of runs) if (r.status !== 'running') delete st.stopping[r.name];
       if (changed) renderRuns();
+      if (wasBusy !== busyRun()) renderForm();
+      else if (Object.keys(st.stopping).length) renderRuns();
     } catch {}
   }
   let pollN = 0;

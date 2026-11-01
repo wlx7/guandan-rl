@@ -9,7 +9,10 @@ import subprocess
 import sys
 import time
 
+import threading
+
 from ..paths import runs_dir, models_dir
+from ..proc import run_alive, read_pid, kill_tree, wait_gone, pid_alive
 
 _procs: dict[str, subprocess.Popen] = {}
 
@@ -33,18 +36,29 @@ def _read_jsonl(path, since=0.0):
 
 
 def run_status(name):
+    d = os.path.join(runs_dir(), name)
+    if run_alive(d):
+        return "running"
     p = _procs.get(name)
     if p is not None and p.poll() is None:
         return "running"
-    rows = _read_jsonl(os.path.join(runs_dir(), name, "metrics.jsonl"))
+    rows = _read_jsonl(os.path.join(d, "metrics.jsonl"))
     if not rows:
         return "idle"
     last = rows[-1]
-    if last.get("type") == "stop":
-        return "stopped"
-    if time.time() - last.get("t", 0) < 60:
+    # runs started by older versions have no pid file: fall back to "metrics updated recently"
+    if read_pid(d) is None and last.get("type") != "stop" and time.time() - last.get("t", 0) < 45:
         return "running"
     return "stopped"
+
+
+def active_runs():
+    out = []
+    for d in glob.glob(os.path.join(runs_dir(), "*")):
+        name = os.path.basename(d)
+        if os.path.isdir(d) and run_status(name) == "running":
+            out.append(name)
+    return out
 
 
 def list_runs():
@@ -81,8 +95,9 @@ def list_runs():
 def start_run(opts: dict):
     name = opts.get("name") or time.strftime("run-%Y%m%d-%H%M%S")
     name = "".join(c for c in name if c.isalnum() or c in "-_.") or time.strftime("run-%Y%m%d-%H%M%S")
-    if run_status(name) == "running":
-        raise ValueError(f"训练 {name} 已在运行")
+    busy = active_runs()
+    if busy:
+        raise ValueError(f"训练「{busy[0]}」正在运行。显卡和内存只够跑一个训练，请先停止它再开始新的训练。")
     args = [sys.executable, "-m", "guandan.train", "--name", name]
     mapping = {
         "preset": "--preset", "base": "--base", "device": "--device", "actor_device": "--actor-device",
@@ -101,18 +116,49 @@ def start_run(opts: dict):
     kw = {}
     if os.name == "nt":
         kw["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    else:
+        kw["start_new_session"] = True
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8")
     p = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=env, **kw)
     _procs[name] = p
     return name
 
 
-def stop_run(name):
+def stop_run(name, grace=60.0):
+    """Ask the run to stop (it saves a checkpoint); force-kill it if it does not exit in time."""
     d = os.path.join(runs_dir(), name)
     if not os.path.isdir(d):
         raise ValueError("没有这个训练")
     with open(os.path.join(d, "STOP"), "w") as f:
         f.write(str(time.time()))
+    pids = [x for x in [read_pid(d), getattr(_procs.get(name), "pid", None)] if x and pid_alive(x)]
+
+    def watchdog():
+        for pid in pids:
+            if not wait_gone(pid, grace):
+                kill_tree(pid)
+                with open(os.path.join(d, "metrics.jsonl"), "a", encoding="utf-8") as f:
+                        f.write(json.dumps({"type": "stop", "t": time.time(), "reason": "force killed (no response)"}) + "\n")
+        try:
+            os.remove(os.path.join(d, "pid"))
+        except OSError:
+            pass
+    if pids:
+        threading.Thread(target=watchdog, daemon=True).start()
+    return {"waiting": bool(pids), "grace": grace}
+
+
+def force_stop(name):
+    d = os.path.join(runs_dir(), name)
+    for pid in [read_pid(d), getattr(_procs.get(name), "pid", None)]:
+        if pid:
+            kill_tree(pid)
+    with open(os.path.join(d, "metrics.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "stop", "t": time.time(), "reason": "force killed by user"}) + "\n")
+    try:
+        os.remove(os.path.join(d, "pid"))
+    except OSError:
+        pass
     return True
 
 
