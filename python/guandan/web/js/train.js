@@ -21,7 +21,7 @@ export function mountTrain(app) {
   const form = {
     name: `run-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`,
     preset: 'medium', base: '', device: 'auto', actor_device: 'cpu', actors: 4, envs: 64, batch: 0,
-    lr: 0.0002, epsilon: 0.01, league: 0.5, eval_interval: 10, eval_rounds: 400, max_hours: 0,
+    lr: 0.0002, epsilon: 0.02, league: 0, eval_interval: 10, eval_rounds: 400, max_hours: 0,
   };
   const root = h('div', { class: 'page' });
   const left = h('div', { class: 'panel' });
@@ -88,7 +88,7 @@ export function mountTrain(app) {
             h('div', { class: 'field' }, h('label', {}, '学习率'), num('lr', { step: 0.00005 })),
             h('div', { class: 'field' }, h('label', {}, '探索率 ε'), num('epsilon', { step: 0.005, min: 0, max: 1 })),
             h('div', { class: 'field' }, h('label', {}, '对手池比例'), num('league', { step: 0.1, min: 0, max: 1 }),
-              h('span', { class: 'hint' }, '这部分对局的对手由早先版本的模型来打，避免只会打自己；0 为纯自对弈')),
+              h('span', { class: 'hint' }, '这部分对局的对手由早先版本的模型来打。默认 0（纯自对弈）：实测纯自对弈每小时样本多一倍，效果更好')),
             h('div', { class: 'field' }, h('label', {}, '评估间隔（分钟）'), num('eval_interval', { min: 1 })),
             h('div', { class: 'field' }, h('label', {}, '每次评估局数'), num('eval_rounds', { min: 50, step: 50 })),
             h('div', { class: 'field' }, h('label', {}, '最长训练（小时，0 不限）'), num('max_hours', { min: 0, step: 0.5 })))),

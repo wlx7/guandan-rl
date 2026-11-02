@@ -1,6 +1,7 @@
 """Plot win-rate curves of a training run (metrics.jsonl) into a PNG.
 
-usage: python scripts/plot_metrics.py guandan_data/runs/main/metrics.jsonl out.png
+usage: python scripts/plot_metrics.py guandan_data/runs/main/metrics.jsonl out.png [offset]
+offset: samples the base model had already been trained on (shifts the x axis)
 """
 import json
 import sys
@@ -22,14 +23,14 @@ MUTED = "#86A093"
 SERIES = [("rule", "对规则 AI", "#B08A30"), ("base", "对基准模型", "#2A9FD0"), ("random", "对随机出牌", "#D65A50")]
 
 
-def main(src, out):
+def main(src, out, offset=0.0):
     rows = [json.loads(l) for l in open(src, encoding="utf-8") if l.strip()]
     evals = [r for r in rows if r.get("type") == "eval"]
     fig, axes = plt.subplots(1, 2, figsize=(11, 4), dpi=150, facecolor=SURFACE)
     for ax, field, title, ylim in [(axes[0], "win_rate", "每局胜率", (0, 1)), (axes[1], "score", "平均每局升级数", None)]:
         ax.set_facecolor(SURFACE)
         for key, label, color in SERIES:
-            pts = [(e["frames"] / 1e6, e[key][field]) for e in evals if key in e]
+            pts = [((e["frames"] + offset) / 1e6, e[key][field]) for e in evals if key in e]
             if pts:
                 xs, ys = zip(*pts)
                 ax.plot(xs, ys, color=color, lw=2, label=label)
@@ -51,4 +52,4 @@ def main(src, out):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], float(sys.argv[3]) if len(sys.argv) > 3 else 0.0)

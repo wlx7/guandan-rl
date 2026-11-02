@@ -20,7 +20,7 @@ _executor = ThreadPoolExecutor(max_workers=2)
 _agents: dict[tuple, GameAgent] = {}
 
 # "deep": the network proposes candidates and search tests them in sampled worlds
-SEARCH_SETTINGS = {"top_k": 5, "samples": 12, "depth": 14}
+SEARCH_SETTINGS = {"top_k": 5, "samples": 24, "depth": 14}
 
 
 def get_agent(path: str, think: str = "deep") -> GameAgent:

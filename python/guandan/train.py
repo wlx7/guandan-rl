@@ -1,13 +1,13 @@
 """Pure self-play reinforcement learning (Deep Monte-Carlo).
 
-* N actor processes each run `--envs` matches in parallel. Seats are played by the latest
-  network (epsilon-greedy). Every decision (state, history, chosen action) is labelled
-  with the final outcome of that round for the acting player's team.
-* Opponent pool ("league", `--league`): in a share of the rounds the opposing team is
-  played by an earlier version of the network (the base model and the snapshots of this
-  run). Only the latest network's decisions become samples. Pure self-play against an
-  exact copy lets the network specialise in beating its own style; mixing in earlier
-  versions keeps it robust against other ways of playing.
+* N actor processes each run `--envs` matches in parallel. All four seats are played by
+  the latest network (epsilon-greedy). Every decision (state, history, chosen action) is
+  labelled with the final outcome of that round for the acting player's team.
+* Optional opponent pool (`--league`, off by default): in a share of the rounds the
+  opposing team is played by an earlier version of the network; only the latest
+  network's decisions become samples. In a 2+2 hour A/B test it lost to plain self-play,
+  mostly because self-play produced twice as many samples per hour.
+* Optional search labels (`--search-actors`, off by default, experimental).
 * The learner regresses Q(s, a) onto these Monte-Carlo returns.
 * An evaluator process periodically measures the latest checkpoint on duplicate deals
   (each deal played twice with the teams swapped) against a random player, a fixed
@@ -50,8 +50,8 @@ def build_parser():
     ap.add_argument("--envs", type=int, default=0, help="parallel matches per actor (0 = auto)")
     ap.add_argument("--batch", type=int, default=0, help="0 = auto (2048 on GPU, 512 on CPU)")
     ap.add_argument("--lr", type=float, default=2e-4)
-    ap.add_argument("--epsilon", type=float, default=0.01, help="share of random exploration moves")
-    ap.add_argument("--league", type=float, default=0.5,
+    ap.add_argument("--epsilon", type=float, default=0.02, help="share of random exploration moves")
+    ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
     ap.add_argument("--search-actors", type=int, default=0,
