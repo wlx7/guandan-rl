@@ -32,7 +32,7 @@ import torch.multiprocessing as mp
 
 from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
-                    HIST_DIM, ACTION_DIM, save_checkpoint, load_checkpoint, count_params)
+                    HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params)
 from .agents import BatchPolicy, unpack_obs, subset_obs
 from .paths import runs_dir
 
@@ -54,6 +54,8 @@ def build_parser():
     ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
+    ap.add_argument("--aux", type=float, default=0.0,
+                    help="weight of the auxiliary loss that predicts the other players' hands (0 = off)")
     ap.add_argument("--search-actors", type=int, default=0,
                     help="self-play processes that label the top candidate moves with search values (expert iteration)")
     ap.add_argument("--search-envs", type=int, default=64, help="matches per search actor")
@@ -127,6 +129,8 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         policy = BatchPolicy(model, dev)
         n_env = args["envs"]
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
+        aux = float(args.get("aux", 0.0)) > 0
+        env.set_record_hidden(aux)
         rng = np.random.default_rng(args["seed"] * 100 + aid + int(time.time()))
         league = float(args.get("league", 0.0))
         pool: dict[str, BatchPolicy] = {}
@@ -206,9 +210,10 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                 h_p = np.packbits(np.frombuffer(hb, np.uint8).reshape(n, H_FLAT), axis=1)
                 a_p = np.packbits(np.frombuffer(ab, np.uint8).reshape(n, ACTION_DIM), axis=1)
                 t = np.frombuffer(tb, np.float32).copy()
+                x_p = np.packbits(np.frombuffer(env.take_hidden(), np.uint8).reshape(n, HIDDEN_DIM), axis=1) if aux else None
                 while not stop.is_set():
                     try:
-                        q.put((aid, s_p, h_p, a_p, t, rounds, steps), timeout=1.0)
+                        q.put((aid, s_p, h_p, a_p, t, rounds, steps, x_p), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -275,7 +280,7 @@ def search_actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict
                 S, H, A, T = [], [], [], []
                 while not stop.is_set():
                     try:
-                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps), timeout=1.0)
+                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps, None), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -344,38 +349,46 @@ def evaluator_main(run_dir: str, args: dict, stop):
 class Replay:
     """Bit-packed replay buffer that lives on the learner device (GPU memory when available)."""
 
-    def __init__(self, cap, device):
+    def __init__(self, cap, device, hidden=False):
         self.cap = cap
         self.device = device
         self.s = torch.zeros((cap, (STATE_DIM + 7) // 8), dtype=torch.uint8, device=device)
         self.h = torch.zeros((cap, (H_FLAT + 7) // 8), dtype=torch.uint8, device=device)
         self.a = torch.zeros((cap, (ACTION_DIM + 7) // 8), dtype=torch.uint8, device=device)
         self.t = torch.zeros(cap, dtype=torch.float32, device=device)
+        # auxiliary labels: the other players' hands
+        self.x = torch.zeros((cap, (HIDDEN_DIM + 7) // 8), dtype=torch.uint8, device=device) if hidden else None
         self.pos = 0
         self.size = 0
 
-    def add(self, s, h, a, t):
+    def add(self, s, h, a, t, x=None):
         n = len(t)
         idx = (torch.arange(n, device=self.device) + self.pos) % self.cap
         self.s[idx] = torch.from_numpy(s).to(self.device)
         self.h[idx] = torch.from_numpy(h).to(self.device)
         self.a[idx] = torch.from_numpy(a).to(self.device)
         self.t[idx] = torch.from_numpy(t).to(self.device)
+        if self.x is not None and x is not None:
+            self.x[idx] = torch.from_numpy(x).to(self.device)
         self.pos = (self.pos + n) % self.cap
         self.size = min(self.cap, self.size + n)
 
     def sample(self, b):
+        """(states, hists, actions, targets, hidden-hand labels or None)"""
         idx = torch.randint(0, self.size, (b,), device=self.device)
         if self.device == "cpu":  # numpy is faster than torch bit ops on CPU
             ii = idx.numpy()
             s = torch.from_numpy(np.unpackbits(self.s.numpy()[ii], axis=1, count=STATE_DIM)).float()
             h = torch.from_numpy(np.unpackbits(self.h.numpy()[ii], axis=1, count=H_FLAT)).view(b, HIST_LEN, HIST_DIM).float()
             a = torch.from_numpy(np.unpackbits(self.a.numpy()[ii], axis=1, count=ACTION_DIM)).float()
-            return s, h, a, self.t[idx]
+            x = (torch.from_numpy(np.unpackbits(self.x.numpy()[ii], axis=1, count=HIDDEN_DIM)).float()
+                 if self.x is not None else None)
+            return s, h, a, self.t[idx], x
         s = unpack_bits(self.s[idx], STATE_DIM).float()
         h = unpack_bits(self.h[idx], H_FLAT).view(b, HIST_LEN, HIST_DIM).float()
         a = unpack_bits(self.a[idx], ACTION_DIM).float()
-        return s, h, a, self.t[idx]
+        x = unpack_bits(self.x[idx], HIDDEN_DIM).float() if self.x is not None else None
+        return s, h, a, self.t[idx], x
 
 
 def log_line(path, row):
@@ -452,6 +465,8 @@ def run(args):
         print(f"starting from base model {args.base} ({model.cfg.preset})", flush=True)
     else:
         model = GuandanNet(PRESETS[args.preset])
+    if args.aux > 0:
+        model.add_belief_head()
     cfg = model.cfg
     model.to(device).train()
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -485,7 +500,7 @@ def run(args):
                  eval_interval=args.eval_interval, eval_rounds=args.eval_rounds, eval_threads=args.eval_threads,
                  base=args.base, league=args.league, run_dir=run_dir,
                  pool=[p for p in args.pool.split(";") if p.strip()],
-                 search_envs=args.search_envs, search_cfg=args.search_cfg)
+                 search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux)
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
@@ -508,7 +523,7 @@ def run(args):
 
     if device.startswith("cuda"):
         set_priority("high")
-    buf = Replay(args.buffer, device)
+    buf = Replay(args.buffer, device, hidden=args.aux > 0)
     sbuf = Replay(max(20_000, args.buffer // 2), device) if args.search_actors else None
     s_received = 0
     busy = 0.0
@@ -517,6 +532,7 @@ def run(args):
     rounds = 0
     steps_total = 0
     loss_acc, loss_n = 0.0, 0
+    aux_acc = 0.0
     t_start = time.time()
     t_last_log = t_start
     t_last_save = t_start
@@ -553,14 +569,14 @@ def run(args):
                         item = q.get_nowait()
                 except queue_mod.Empty:
                     break
-                src, s_p, h_p, a_p, t, r_cnt, st_cnt = item
+                src, s_p, h_p, a_p, t, r_cnt, st_cnt, x_p = item
                 t = t / 3.0
                 if src < 0 and sbuf is not None:  # search labels
                     sbuf.add(s_p, h_p, a_p, t)
                     s_received += len(t)
                     got += 1
                     continue
-                buf.add(s_p, h_p, a_p, t)
+                buf.add(s_p, h_p, a_p, t, x_p)
                 received += len(t)
                 frames += len(t)
                 rounds += r_cnt
@@ -574,14 +590,20 @@ def run(args):
             while buf.size >= args.batch * 4 and trained < received * args.reuse and budget < 50:
                 if sbuf is not None and sbuf.size >= 4096:
                     ns = int(args.batch * args.search_share)
-                    st, ht, at, tt = buf.sample(args.batch - ns)
-                    s2, h2, a2, t2 = sbuf.sample(ns)
+                    st, ht, at, tt, xt = buf.sample(args.batch - ns)
+                    s2, h2, a2, t2, _ = sbuf.sample(ns)
                     st, ht, at, tt = torch.cat([st, s2]), torch.cat([ht, h2]), torch.cat([at, a2]), torch.cat([tt, t2])
                 else:
-                    st, ht, at, tt = buf.sample(args.batch)
+                    st, ht, at, tt, xt = buf.sample(args.batch)
                 with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
-                    pred = model(st, ht, at)
+                    z = model.encode_state(st, ht)
+                    pred = model.score(z, at)
+                    bl = model.belief_logits(z[: len(xt)]) if (xt is not None and args.aux > 0) else None
                 loss = torch.nn.functional.mse_loss(pred.float(), tt)
+                if bl is not None:
+                    aux_loss = torch.nn.functional.binary_cross_entropy_with_logits(bl.float(), xt)
+                    aux_acc += float(aux_loss.detach())
+                    loss = loss + args.aux * aux_loss
                 opt.zero_grad(set_to_none=True)
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
@@ -613,6 +635,7 @@ def run(args):
                        "buffer": buf.size, "train_seconds": train_seconds,
                        "learner_busy": busy / dt,
                        "search_labels": s_received,
+                       "aux_loss": aux_acc / max(1, loss_n) if args.aux > 0 else None,
                        "alive": sum(p.is_alive() for p in procs[:-1])}
                 log_line(metrics, row)
                 print(f"[train] frames={frames:,} fps={row['fps']:.0f} loss={row['loss']:.4f} "
@@ -621,6 +644,7 @@ def run(args):
                 frames_at_log = frames
                 rounds_at_log = rounds
                 loss_acc, loss_n = 0.0, 0
+                aux_acc = 0.0
                 busy = 0.0
                 t_last_log = now
                 if received == 0 and now - t_start > 240:

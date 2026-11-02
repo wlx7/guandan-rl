@@ -182,3 +182,23 @@ def test_search_with_beliefs_returns_legal_moves():
         for g, r in zip(games, res):
             n = len(g.legal_moves())
             assert sorted(i for i, *_ in r) == list(range(n))
+
+
+def test_hidden_labels_and_belief_head_roundtrip(tmp_path):
+    import torch
+    from guandan.model import GuandanNet, PRESETS, save_checkpoint, load_checkpoint, HIDDEN_DIM
+    env = _core.VecEnv(4, 2, True)
+    env.set_record_hidden(True)
+    for _ in range(600):
+        env.observe()
+        env.step([0] * 4, True)
+    n = env.take_samples()[0]
+    x = np.frombuffer(env.take_hidden(), np.uint8).reshape(n, HIDDEN_DIM)
+    assert n > 0 and x.sum() > 0
+    net = GuandanNet(PRESETS["tiny"]).add_belief_head()
+    p = tmp_path / "m.pt"
+    save_checkpoint(str(p), net, {"frames": 1}, half=True)
+    m, _ = load_checkpoint(str(p))
+    assert m.cfg.belief
+    z = m.encode_state(torch.zeros(2, 1550), torch.zeros(2, 24, 140))
+    assert m.belief_logits(z).shape == (2, HIDDEN_DIM)

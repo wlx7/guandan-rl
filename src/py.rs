@@ -87,6 +87,16 @@ impl PyVecEnv {
         (n, PyBytes::new(py, &s), PyBytes::new(py, &h), PyBytes::new(py, &a), PyBytes::new(py, &f32_bytes(&t)))
     }
 
+    /// Record the other players' hands with every sample (auxiliary labels, see take_hidden).
+    fn set_record_hidden(&mut self, on: bool) {
+        self.inner.set_record_hidden(on);
+    }
+
+    /// Hidden-hand labels (324 bits per sample) of the samples returned by the last take_samples.
+    fn take_hidden<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.take_hidden())
+    }
+
     /// Only the given seats of environment `i` produce training samples from now on.
     fn set_learners(&mut self, i: usize, seats: [bool; 4]) {
         self.inner.set_learners(i, seats);
@@ -380,6 +390,11 @@ fn dims() -> (usize, usize, usize, usize) {
 }
 
 #[pyfunction]
+fn hidden_dim() -> usize {
+    HIDDEN_DIM
+}
+
+#[pyfunction]
 fn classify_cards(cards: Vec<u8>, level: u8) -> Vec<PyMove> {
     classify(&cards, level).iter().map(to_py).collect()
 }
@@ -400,6 +415,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVecEnv>()?;
     m.add_class::<PyRollouts>()?;
     m.add_function(wrap_pyfunction!(dims, m)?)?;
+    m.add_function(wrap_pyfunction!(hidden_dim, m)?)?;
     m.add_function(wrap_pyfunction!(classify_cards, m)?)?;
     m.add_function(wrap_pyfunction!(card_label, m)?)?;
     m.add_function(wrap_pyfunction!(kind_name, m)?)?;

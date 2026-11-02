@@ -11,6 +11,7 @@ struct Step {
     state: Vec<u8>,
     hist: Vec<u8>,
     action: Vec<u8>,
+    hidden: Vec<u8>,
 }
 
 #[derive(Clone, Debug)]
@@ -33,6 +34,8 @@ pub struct VecEnv {
     pub out_h: Vec<u8>,
     pub out_a: Vec<u8>,
     pub out_t: Vec<f32>,
+    pub out_x: Vec<u8>,
+    record_hidden: bool,
     /// Seats whose decisions become training samples (per environment). Seats played by
     /// an older opponent model are excluded: their values belong to a different policy.
     learners: Vec<[bool; 4]>,
@@ -63,6 +66,8 @@ impl VecEnv {
             out_h: vec![],
             out_a: vec![],
             out_t: vec![],
+            out_x: vec![],
+            record_hidden: false,
             learners: vec![[true; 4]; n],
             rng,
             random_levels,
@@ -154,6 +159,13 @@ impl VecEnv {
                     state: self.st[i].clone(),
                     hist: self.hs[i].clone(),
                     action: self.acts[i][c * ACTION_DIM..(c + 1) * ACTION_DIM].to_vec(),
+                    hidden: if self.record_hidden {
+                        let mut x = vec![0u8; HIDDEN_DIM];
+                        encode_hidden(&self.games[i], me, &mut x);
+                        x
+                    } else {
+                        vec![]
+                    },
                 });
             }
             let mv = self.moves[i][c].clone();
@@ -170,6 +182,9 @@ impl VecEnv {
                     self.out_h.extend_from_slice(&st.hist);
                     self.out_a.extend_from_slice(&st.action);
                     self.out_t.push(rew[team(st.player) as usize]);
+                    if self.record_hidden {
+                        self.out_x.extend_from_slice(&st.hidden);
+                    }
                 }
                 if ph == Phase::MatchOver {
                     self.games[i].new_match();
@@ -198,6 +213,16 @@ impl VecEnv {
             std::mem::take(&mut self.out_a),
             std::mem::take(&mut self.out_t),
         )
+    }
+
+    /// Also record the other players' hands of every sample (auxiliary training labels),
+    /// returned by `take_hidden` in the same order as `take_samples`.
+    pub fn set_record_hidden(&mut self, on: bool) {
+        self.record_hidden = on;
+    }
+
+    pub fn take_hidden(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.out_x)
     }
 
     /// Choose which seats of environment `i` produce training samples from now on.

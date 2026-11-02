@@ -17,6 +17,7 @@ import torch.nn as nn
 from . import _core
 
 STATE_DIM, HIST_LEN, HIST_DIM, ACTION_DIM = _core.dims()
+HIDDEN_DIM = _core.hidden_dim()
 
 
 @dataclass
@@ -25,6 +26,7 @@ class ModelConfig:
     lstm: int = 256
     head_layers: int = 3
     preset: str = "medium"
+    belief: bool = False  # auxiliary head that predicts the other players' hands (training only)
 
     def to_dict(self):
         return asdict(self)
@@ -67,6 +69,19 @@ class GuandanNet(nn.Module):
         self.state_mlp = mlp([STATE_DIM + cfg.lstm, h, h])
         head = [h + ACTION_DIM] + [h] * (cfg.head_layers - 1) + [h // 2]
         self.head = nn.Sequential(mlp(head), nn.Linear(h // 2, 1))
+        if cfg.belief:
+            self.belief = nn.Linear(h, HIDDEN_DIM)
+
+    def add_belief_head(self):
+        """Add the auxiliary hidden-hand head to a model trained without it."""
+        if not self.cfg.belief:
+            self.cfg.belief = True
+            self.belief = nn.Linear(self.cfg.hidden, HIDDEN_DIM)
+        return self
+
+    def belief_logits(self, z: torch.Tensor) -> torch.Tensor:
+        """Logits of the other three hands (108 bits each, as in the state encoding)."""
+        return self.belief(z)
 
     def encode_state(self, state: torch.Tensor, hist: torch.Tensor) -> torch.Tensor:
         _, (hn, _) = self.lstm(hist)
@@ -130,10 +145,13 @@ def save_checkpoint(path, model: GuandanNet, meta: dict | None = None, optimizer
 
 def load_checkpoint(path, device="cpu", with_optimizer=False):
     obj = torch.load(path, map_location="cpu", weights_only=False)
-    cfg = ModelConfig(**obj["config"])
+    known = ModelConfig.__dataclass_fields__
+    cfg = ModelConfig(**{k: v for k, v in obj["config"].items() if k in known})
     model = GuandanNet(cfg)
     sd = {k: v.float() if v.is_floating_point() else v for k, v in obj["state_dict"].items()}
-    model.load_state_dict(sd)
+    missing, _unexpected = model.load_state_dict(sd, strict=False)  # tolerate heads of newer versions
+    if missing:
+        raise RuntimeError(f"checkpoint {path} lacks weights: {missing[:5]}")
     model.to(device)
     model.eval()
     if with_optimizer:

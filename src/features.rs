@@ -10,6 +10,8 @@ pub const STATE_DIM: usize = 1550;
 pub const HIST_LEN: usize = 24;
 pub const HIST_DIM: usize = 140;
 pub const ACTION_DIM: usize = 413;
+/// Training-only label: the hands of the other three players (108 bits each).
+pub const HIDDEN_DIM: usize = 324;
 
 struct W<'a> {
     v: &'a mut [u8],
@@ -155,6 +157,18 @@ pub fn encode_state(g: &Game, me: u8, out: &mut [u8]) {
     w.onehot(3, g.a_fail[my_team].min(2) as usize);
     w.onehot(3, g.a_fail[1 - my_team].min(2) as usize);
     debug_assert_eq!(w.o, STATE_DIM);
+}
+
+/// The hands of the other three players (next, partner, previous), 108 bits each. Never an
+/// input of the playing network: only the target of an auxiliary prediction during training.
+pub fn encode_hidden(g: &Game, me: u8, out: &mut [u8]) {
+    debug_assert_eq!(out.len(), HIDDEN_DIM);
+    out.fill(0);
+    let mut w = W { v: out, o: 0 };
+    for r in 1..4u8 {
+        let p = (me + r) & 3;
+        w.cards108(&g.hands[p as usize]);
+    }
 }
 
 pub fn encode_history(g: &Game, me: u8, out: &mut [u8]) {
