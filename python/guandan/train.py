@@ -136,8 +136,12 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         learn_team = np.zeros(n_env, np.int64)
 
         def refresh_pool():
+            # every few minutes this actor plays against (at most) two models of the pool, so
+            # that one step never needs more than three network calls
             nonlocal pool_list
             paths = pool_paths(args["run_dir"], args.get("base", ""), args.get("pool", []))
+            if len(paths) > 2:
+                paths = [paths[i] for i in rng.choice(len(paths), 2, replace=False)]
             for p in paths:
                 if p not in pool:
                     try:
@@ -145,7 +149,13 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                         pool[p] = BatchPolicy(m, dev)
                     except Exception:
                         continue
+            for p in list(pool):
+                if p not in paths:
+                    del pool[p]
             pool_list = [p for p in paths if p in pool]
+            for i in range(n_env):
+                if opp[i] is not None and opp[i] not in pool:
+                    assign(i)
 
         def assign(i):
             if pool_list and rng.random() < league:
@@ -163,8 +173,9 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         while not stop.is_set():
             if league > 0 and time.time() - t_pool > 300:
                 t_pool = time.time()
+                had = any(opp)
                 refresh_pool()
-                if not any(opp):
+                if not had:
                     for i in range(n_env):
                         assign(i)
             if version.value != local_v:
