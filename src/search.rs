@@ -56,6 +56,108 @@ impl Game {
     }
 }
 
+/// Encoded decisions of other players, replayed in one (possibly sampled) world.
+pub struct ReplayObs {
+    pub players: Vec<u8>,
+    pub states: Vec<u8>,
+    pub hists: Vec<u8>,
+    pub actions: Vec<u8>,
+    pub offsets: Vec<u32>,
+    /// index of the move actually played among the legal moves, or u32::MAX if the hand
+    /// of this world could not have produced it
+    pub chosen: Vec<u32>,
+}
+
+impl Game {
+    /// The position at the start of this round's play phase, rebuilt from the current hands
+    /// plus every card played since (all of them are in `history`).
+    pub fn play_start(&self) -> Option<Game> {
+        let first = self.history.first()?.0;
+        let mut g = self.clone();
+        for p in 0..4 {
+            for t in 0..54 {
+                g.hands[p][t] += self.played[p][t];
+            }
+        }
+        g.played = [[0; 54]; 4];
+        g.history.clear();
+        g.finished.clear();
+        g.last_move = None;
+        g.passes = 0;
+        g.current = first;
+        g.last_player = first;
+        g.trick_id = 0;
+        g.bombs = [0; 4];
+        g.jiefeng = false;
+        g.phase = Phase::Play;
+        g.winner = -1;
+        g.last_result = None;
+        Some(g)
+    }
+
+    /// Replay this round's plays from `play_start` and encode the last `last` decisions of
+    /// players other than `me` that had more than one legal move.
+    pub fn replay_decisions(&self, me: u8, last: usize) -> ReplayObs {
+        let mut out = ReplayObs {
+            players: vec![],
+            states: vec![],
+            hists: vec![],
+            actions: vec![],
+            offsets: vec![0],
+            chosen: vec![],
+        };
+        let mut g = match self.play_start() {
+            Some(g) => g,
+            None => return out,
+        };
+        let n = self.history.len();
+        // which history steps to encode: the last `last` decisions of other players
+        let mut keep = vec![false; n];
+        let mut k = 0;
+        for i in (0..n).rev() {
+            if k >= last {
+                break;
+            }
+            if self.history[i].0 != me {
+                keep[i] = true;
+                k += 1;
+            }
+        }
+        for (i, (p, m)) in self.history.iter().enumerate() {
+            if keep[i] {
+                let mv = g.legal_moves();
+                if mv.len() > 1 {
+                    let idx = mv
+                        .iter()
+                        .position(|x| x.kind == m.kind && x.key == m.key && x.cards == m.cards)
+                        .map(|x| x as u32)
+                        .unwrap_or(u32::MAX);
+                    let base_s = out.states.len();
+                    out.states.resize(base_s + STATE_DIM, 0);
+                    encode_state(&g, *p, &mut out.states[base_s..]);
+                    let base_h = out.hists.len();
+                    out.hists.resize(base_h + HIST_LEN * HIST_DIM, 0);
+                    encode_history(&g, *p, &mut out.hists[base_h..]);
+                    let base_a = out.actions.len();
+                    out.actions.resize(base_a + mv.len() * ACTION_DIM, 0);
+                    for (j, x) in mv.iter().enumerate() {
+                        let o = base_a + j * ACTION_DIM;
+                        encode_action(&g, *p, x, &mut out.actions[o..o + ACTION_DIM]);
+                    }
+                    let last_off = *out.offsets.last().unwrap();
+                    out.offsets.push(last_off + mv.len() as u32);
+                    out.players.push(*p);
+                    out.chosen.push(idx);
+                }
+            }
+            if g.current != *p || g.apply(m).is_err() {
+                break; // this world cannot reproduce the history
+            }
+        }
+        out
+    }
+}
+
 /// A batch of games played forward until each one ends its round.
 pub struct Rollouts {
     pub games: Vec<Game>,
@@ -184,6 +286,46 @@ mod tests {
                 let n: u8 = (0..4).map(|p| d.hands[p][t] + d.played[p][t]).sum();
                 assert_eq!(n, 2);
             }
+        }
+    }
+
+    #[test]
+    fn replay_reproduces_the_round() {
+        let mut rng = Rng::new(9);
+        for seed in 0..30u64 {
+            let mut g = Game::new(seed, Rules::default());
+            for _ in 0..(10 + seed as usize * 3) {
+                if g.phase != Phase::Play {
+                    break;
+                }
+                let mv = g.legal_moves();
+                let m = mv[rng.below(mv.len() as u64) as usize].clone();
+                g.apply(&m).unwrap();
+            }
+            if g.phase != Phase::Play {
+                continue;
+            }
+            let mut r = g.play_start().unwrap();
+            for (_, m) in g.history.clone() {
+                r.apply(&m).unwrap();
+            }
+            assert_eq!(r.hands, g.hands);
+            assert_eq!(r.played, g.played);
+            assert_eq!(r.current, g.current);
+            assert_eq!(r.finished, g.finished);
+            let me = g.current;
+            let obs = g.replay_decisions(me, 1000);
+            assert!(obs.chosen.iter().all(|&c| c != u32::MAX));
+            assert_eq!(obs.offsets.len(), obs.chosen.len() + 1);
+            // a sampled world replays the same history (its legal move sets differ)
+            let w = g.determinize(me, &mut rng);
+            let mut rw = w.play_start().unwrap();
+            for (_, m) in w.history.clone() {
+                rw.apply(&m).unwrap();
+            }
+            assert_eq!(rw.hands, w.hands);
+            let ow = w.replay_decisions(me, 1000);
+            assert_eq!(ow.offsets.len(), ow.chosen.len() + 1);
         }
     }
 

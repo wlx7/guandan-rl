@@ -291,6 +291,27 @@ impl PyGame {
         }
         (PyBytes::new(py, &s), PyBytes::new(py, &h), PyBytes::new(py, &a), mv.len())
     }
+    /// Replay this round's plays and encode the last `last` decisions of the other players:
+    /// (players, states, hists, actions, offsets, chosen); chosen = 2**32-1 when the move
+    /// actually played was not available to that player's hand in this world.
+    #[allow(clippy::type_complexity)]
+    #[pyo3(signature = (me, last = 16))]
+    fn replay_decisions<'py>(
+        &self,
+        py: Python<'py>,
+        me: u8,
+        last: usize,
+    ) -> (Bound<'py, PyBytes>, Bound<'py, PyBytes>, Bound<'py, PyBytes>, Bound<'py, PyBytes>, Vec<u32>, Vec<u32>) {
+        let r = self.g.replay_decisions(me, last);
+        (
+            PyBytes::new(py, &r.players),
+            PyBytes::new(py, &r.states),
+            PyBytes::new(py, &r.hists),
+            PyBytes::new(py, &r.actions),
+            r.offsets,
+            r.chosen,
+        )
+    }
     fn describe(&self, kind: u8, key: u8, cards: Vec<u8>) -> PyResult<String> {
         Ok(from_py(kind, key, cards)?.describe(self.g.level))
     }

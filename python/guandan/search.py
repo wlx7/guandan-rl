@@ -30,18 +30,65 @@ def _seg_max(q, off):
 
 
 class SearchAgent:
-    def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25):
+    def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25,
+                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02):
         self.model = model
         self.device = torch.device(device)
         self.policy = BatchPolicy(model, device)
         self.top_k = top_k
         self.samples = samples
         self.depth = depth
-        self.prior = prior  # weight of the network's own Q in the final score
+        self.prior = prior
+        # belief > 0: draw `belief` times more candidate worlds and keep them in proportion to
+        # how likely the other players' recent plays were in each world, judged by the network
+        # (softmax of its values with temperature `belief_temp` levels, at least `belief_floor`
+        # per decision so that a player who plays differently from the network is not ruled out)
+        self.belief = belief
+        self.belief_last = belief_last
+        self.belief_temp = belief_temp
+        self.belief_floor = belief_floor
+        self.rng = np.random.default_rng()  # weight of the network's own Q in the final score
 
     # ------------------------------------------------------------------ networks
     def _q(self, s, h, a, off):
         return self.policy.q_values(s, h, a, off) * 3.0  # in levels
+
+    # ------------------------------------------------------------------ beliefs
+    def _log_likelihood(self, worlds, mes):
+        """log P(recent plays of the other players | world) under the network's soft policy."""
+        obs = [w.replay_decisions(me, self.belief_last) for w, me in zip(worlds, mes)]
+        counts = [len(o[5]) for o in obs]
+        logw = np.zeros(len(worlds), np.float64)
+        if sum(counts) == 0:
+            return logw
+        s = np.frombuffer(b"".join(o[1] for o in obs), np.uint8).reshape(-1, STATE_DIM)
+        h = np.frombuffer(b"".join(o[2] for o in obs), np.uint8).reshape(-1, HIST_LEN, HIST_DIM)
+        a = np.frombuffer(b"".join(o[3] for o in obs), np.uint8).reshape(-1, ACTION_DIM)
+        off = [0]
+        chosen = []
+        for o in obs:
+            n_moves = np.diff(np.asarray(o[4], np.int64))
+            for k in n_moves:
+                off.append(off[-1] + int(k))
+            chosen += list(o[5])
+        off = np.asarray(off, np.int64)
+        q = self._q(s, h, a, off) / self.belief_temp
+        mx = np.maximum.reduceat(q, off[:-1])
+        z = np.log(np.add.reduceat(np.exp(q - np.repeat(mx, np.diff(off))), off[:-1])) + mx
+        chosen = np.asarray(chosen, np.int64)
+        ok = chosen < np.diff(off)
+        lp = np.full(len(chosen), np.log(self.belief_floor))
+        lp[ok] = np.maximum(q[off[:-1][ok] + chosen[ok]] - z[ok], np.log(self.belief_floor))
+        owner = np.repeat(np.arange(len(worlds)), counts)
+        np.add.at(logw, owner, lp)
+        return logw
+
+    def _pick(self, logw, n):
+        """Systematic resampling of n worlds in proportion to exp(logw)."""
+        w = np.exp(logw - logw.max())
+        c = np.cumsum(w / w.sum())
+        u = (self.rng.random() + np.arange(n)) / n
+        return np.minimum(np.searchsorted(c, u), len(w) - 1)
 
     # ------------------------------------------------------------------ play-outs
     def _simulate(self, sims, teams):
@@ -93,12 +140,28 @@ class SearchAgent:
                 out[gi] = [(0, float(q[0]), float(q[0]), True)]
                 continue
             order = np.argsort(-q)
-            cands = order[: self.top_k]
-            plan[gi] = (q, order, cands)
+            plan[gi] = (q, order, order[: self.top_k])
+        # sampled worlds for every game that needs a search
+        all_worlds = {}
+        for gi in plan:
+            g = games[gi]
+            base = next(_seed) * 7919
+            m = self.samples * max(1, self.belief)
+            all_worlds[gi] = [g.determinize(base + j) for j in range(m)]
+        if self.belief > 1 and plan:
+            flat = [(gi, w) for gi in plan for w in all_worlds[gi]]
+            logw = self._log_likelihood([w for _, w in flat], [games[gi].current for gi, _ in flat])
+            pos = 0
+            for gi in plan:
+                m = len(all_worlds[gi])
+                keep = self._pick(logw[pos:pos + m], self.samples)
+                all_worlds[gi] = [all_worlds[gi][i] for i in keep]
+                pos += m
+        for gi, (q, order, cands) in plan.items():
+            g = games[gi]
             moves = g.legal_moves()
             team = g.current % 2
-            base = next(_seed) * 7919
-            worlds = [g.determinize(base + j) for j in range(self.samples)]
+            worlds = all_worlds[gi]
             for cj, ci in enumerate(cands):
                 k, key, cards = moves[ci]
                 for w in worlds:

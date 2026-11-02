@@ -162,3 +162,23 @@ def test_duplicate_deals_cancel_for_identical_players():
     assert same["score"] == 0.0  # same deterministic player on both sides: every deal cancels
     r = duplicate_match(RulePlayer(), RandomPlayer(1), deals=24, batch=12)
     assert r["score"] > 0.5 and r["rounds"] == 48
+
+
+def test_search_with_beliefs_returns_legal_moves():
+    import torch
+    from guandan.model import GuandanNet, PRESETS
+    from guandan.search import SearchAgent
+    torch.manual_seed(0)
+    net = GuandanNet(PRESETS["tiny"]).eval()
+    env = _core.VecEnv(3, 21, True)
+    for _ in range(30):
+        env.observe()
+        env.step([0, 0, 0], False)
+    games = [env.game(i) for i in range(3)]
+    for belief in (0, 3):
+        sa = SearchAgent(net, top_k=3, samples=4, depth=3, belief=belief, belief_last=8)
+        with torch.no_grad():
+            res = sa.evaluate_many(games)
+        for g, r in zip(games, res):
+            n = len(g.legal_moves())
+            assert sorted(i for i, *_ in r) == list(range(n))
