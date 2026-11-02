@@ -30,18 +30,14 @@ def _seg_max(q, off):
 
 
 class SearchAgent:
-    def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25, temperature=0.0):
+    def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25):
         self.model = model
         self.device = torch.device(device)
         self.policy = BatchPolicy(model, device)
         self.top_k = top_k
         self.samples = samples
         self.depth = depth
-        self.prior = prior
-        # > 0: play-outs sample moves from softmax(Q / temperature) (Q in levels) instead of
-        # always taking the best one, so values do not hinge on one exact line of play
-        self.temperature = temperature
-        self.rng = np.random.default_rng()  # weight of the network's own Q in the final score
+        self.prior = prior  # weight of the network's own Q in the final score
 
     # ------------------------------------------------------------------ networks
     def _q(self, s, h, a, off):
@@ -69,8 +65,6 @@ class SearchAgent:
                 sign = np.where(players % 2 == teams[idx], 1.0, -1.0)
                 values[idx] = _seg_max(q, off) * sign
                 break
-            if self.temperature > 0:
-                q = q / self.temperature - np.log(-np.log(self.rng.random(len(q)) + 1e-12) + 1e-12)
             ro.step(segment_argmax(q, off).tolist())
         r0 = np.asarray(ro.rewards(0), np.float32)
         done = ~np.isnan(r0)

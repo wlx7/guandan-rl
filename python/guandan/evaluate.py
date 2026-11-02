@@ -90,10 +90,8 @@ def make_player(spec, device="cpu", search=""):
     if not search:
         return NetPlayer(m, device)
     from .search import SearchAgent
-    parts = search.split(",")
-    k, n, d = (int(x) for x in parts[:3])
-    temp = float(parts[3]) if len(parts) > 3 else 0.0
-    return SearchPlayer(SearchAgent(m, device, top_k=k, samples=n, depth=d, temperature=temp))
+    k, n, d = (int(x) for x in search.split(","))
+    return SearchPlayer(SearchAgent(m, device, top_k=k, samples=n, depth=d))
 
 
 def main():
@@ -110,7 +108,7 @@ def main():
     ap.add_argument("--batch", type=int, default=64, help="deals played side by side")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--search", default="", help="search for the model: top_k,samples,depth[,temperature], e.g. 5,12,14")
+    ap.add_argument("--search", default="", help="search for the model: top_k,samples,depth, e.g. 5,12,14")
     ap.add_argument("--opponent-search", default="", help="search for the opponent")
     args = ap.parse_args()
     torch.set_grad_enabled(False)

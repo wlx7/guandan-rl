@@ -188,7 +188,9 @@ export function mountTrain(app) {
     const log = h('pre', { class: 'log', id: 'trainlog' }, '');
     const det = h('details', { open: st.logOpen, ontoggle: (e) => { st.logOpen = e.target.open; if (st.logOpen) loadLog(); } }, h('summary', {}, '训练日志'), log);
     right.replaceChildren(tabs, head, statsBox, charts,
-      h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '评估记录'), evalTable,
+      h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '评估记录'),
+      h('div', { class: 'dim', style: { fontSize: '12px', margin: '0 0 6px' } }, '复式评估：每副牌打两遍、双方交换座位，每次评估用同一批牌。“升级”为平均每局升级数，± 为标准误。'),
+      evalTable,
       h('h3', { style: { fontSize: '14px', margin: '16px 0 6px' } }, '这个训练输出的模型'),
       h('div', { class: 'dim', style: { fontSize: '12.5px', marginBottom: '8px' } }, `保存在 ${st.info.home}${st.info.home.includes('\\') ? '\\' : '/'}runs${st.info.home.includes('\\') ? '\\' : '/'}${run.name}。另有 ckpt_latest.pt（含优化器，用于“继续训练”）。`),
       ck.childNodes.length ? ck : h('div', { class: 'dim', style: { fontSize: '13px' } }, '训练开始约 5 分钟后会自动保存第一个模型。'),
@@ -324,7 +326,12 @@ export function mountTrain(app) {
       else {
         const t = h('table', { class: 'evals' }, h('tr', {}, h('th', {}, '样本数'), ...OPP.map((o) => h('th', {}, `${o.name} 胜率 / 升级`))));
         for (const e of evals.slice(-8).reverse()) {
-          t.appendChild(h('tr', {}, h('td', {}, fmtFrames(e.frames)), ...OPP.map((o) => h('td', {}, e[o.key] ? `${(e[o.key].win_rate * 100).toFixed(1)}% / ${e[o.key].score >= 0 ? '+' : ''}${e[o.key].score.toFixed(2)}` : '—'))));
+          const cell = (r) => {
+            if (!r) return '—';
+            const sc = `${r.score >= 0 ? '+' : ''}${r.score.toFixed(2)}${r.score_se != null ? ` ±${r.score_se.toFixed(2)}` : ''}`;
+            return `${(r.win_rate * 100).toFixed(1)}% / ${sc}`;
+          };
+          t.appendChild(h('tr', {}, h('td', {}, fmtFrames(e.frames)), ...OPP.map((o) => h('td', {}, cell(e[o.key])))));
         }
         tb.replaceChildren(t);
       }
