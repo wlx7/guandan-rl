@@ -101,7 +101,7 @@ def start_run(opts: dict):
     args = [sys.executable, "-m", "guandan.train", "--name", name]
     mapping = {
         "preset": "--preset", "base": "--base", "device": "--device", "actor_device": "--actor-device",
-        "actors": "--actors", "envs": "--envs", "batch": "--batch", "lr": "--lr", "epsilon": "--epsilon",
+        "actors": "--actors", "envs": "--envs", "batch": "--batch", "lr": "--lr", "epsilon": "--epsilon", "league": "--league",
         "eval_interval": "--eval-interval", "eval_rounds": "--eval-rounds", "max_hours": "--max-hours",
         "save_interval": "--save-interval",
     }

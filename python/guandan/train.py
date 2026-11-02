@@ -1,11 +1,17 @@
 """Pure self-play reinforcement learning (Deep Monte-Carlo).
 
-* N actor processes each run `--envs` matches in parallel. All four seats are played by
-  the latest network (epsilon-greedy). Every decision (state, history, chosen action) is
-  labelled with the final outcome of that round for the acting player's team.
+* N actor processes each run `--envs` matches in parallel. Seats are played by the latest
+  network (epsilon-greedy). Every decision (state, history, chosen action) is labelled
+  with the final outcome of that round for the acting player's team.
+* Opponent pool ("league", `--league`): in a share of the rounds the opposing team is
+  played by an earlier version of the network (the base model and the snapshots of this
+  run). Only the latest network's decisions become samples. Pure self-play against an
+  exact copy lets the network specialise in beating its own style; mixing in earlier
+  versions keeps it robust against other ways of playing.
 * The learner regresses Q(s, a) onto these Monte-Carlo returns.
-* An evaluator process periodically measures the latest checkpoint against a random
-  player, a fixed rule-based player and (optionally) the base model.
+* An evaluator process periodically measures the latest checkpoint on duplicate deals
+  (each deal played twice with the teams swapped) against a random player, a fixed
+  rule-based player (never used for training) and the base model.
 
 Run:  python -m guandan.train --name myrun --preset medium
 Stop: create the file <run_dir>/STOP (the UI does this) or press Ctrl+C.
@@ -27,7 +33,7 @@ import torch.multiprocessing as mp
 from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
                     HIST_DIM, ACTION_DIM, save_checkpoint, load_checkpoint, count_params)
-from .agents import BatchPolicy, unpack_obs
+from .agents import BatchPolicy, unpack_obs, subset_obs
 from .paths import runs_dir
 
 H_FLAT = HIST_LEN * HIST_DIM
@@ -44,7 +50,10 @@ def build_parser():
     ap.add_argument("--envs", type=int, default=0, help="parallel matches per actor (0 = auto)")
     ap.add_argument("--batch", type=int, default=0, help="0 = auto (2048 on GPU, 512 on CPU)")
     ap.add_argument("--lr", type=float, default=2e-4)
-    ap.add_argument("--epsilon", type=float, default=0.02)
+    ap.add_argument("--epsilon", type=float, default=0.01, help="share of random exploration moves")
+    ap.add_argument("--league", type=float, default=0.5,
+                    help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
+    ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
     ap.add_argument("--reuse", type=float, default=1.0, help="average times each sample is trained on")
     ap.add_argument("--buffer", type=int, default=200_000)
     ap.add_argument("--save-interval", type=float, default=300, help="seconds between checkpoints")
@@ -85,6 +94,21 @@ def unpack_bits(x: torch.Tensor, n: int) -> torch.Tensor:
 
 # ----------------------------------------------------------------------------- actors
 
+def _snapshot_frames(path):
+    try:
+        return int(os.path.basename(path)[6:-4].rstrip("k"))
+    except ValueError:
+        return -1
+
+
+def pool_paths(run_dir, base, extra, keep=8):
+    """Opponent pool: base model, extra checkpoints, and the latest snapshots of this run."""
+    import glob
+    snaps = sorted(glob.glob(os.path.join(run_dir, "model_*k.pt")), key=_snapshot_frames)
+    paths = ([base] if base else []) + [p for p in extra if p] + snaps[-keep:]
+    return [p for p in dict.fromkeys(paths) if os.path.exists(p)]
+
+
 def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
     try:
         set_priority("low")
@@ -96,19 +120,68 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         model = GuandanNet(ModelConfig(**cfg)).to(dev)
         model.eval()
         policy = BatchPolicy(model, dev)
-        env = _core.VecEnv(args["envs"], args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
+        n_env = args["envs"]
+        env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
         rng = np.random.default_rng(args["seed"] * 100 + aid + int(time.time()))
+        league = float(args.get("league", 0.0))
+        pool: dict[str, BatchPolicy] = {}
+        pool_list: list[str] = []
+        t_pool = 0.0
+        opp = [None] * n_env  # pool path of the opposing team's model, None = latest network
+        learn_team = np.zeros(n_env, np.int64)
+
+        def refresh_pool():
+            nonlocal pool_list
+            paths = pool_paths(args["run_dir"], args.get("base", ""), args.get("pool", []))
+            for p in paths:
+                if p not in pool:
+                    try:
+                        m, _ = load_checkpoint(p, dev)
+                        pool[p] = BatchPolicy(m, dev)
+                    except Exception:
+                        continue
+            pool_list = [p for p in paths if p in pool]
+
+        def assign(i):
+            if pool_list and rng.random() < league:
+                opp[i] = pool_list[int(rng.integers(len(pool_list)))]
+                learn_team[i] = int(rng.integers(2))
+                env.set_learners(i, [p % 2 == learn_team[i] for p in range(4)])
+            else:
+                opp[i] = None
+                env.set_learners(i, [True] * 4)
+
         local_v = -1
         rounds = 0
         steps = 0
         send_size = 4096
         while not stop.is_set():
+            if league > 0 and time.time() - t_pool > 300:
+                t_pool = time.time()
+                refresh_pool()
+                if not any(opp):
+                    for i in range(n_env):
+                        assign(i)
             if version.value != local_v:
                 local_v = version.value
                 model.load_state_dict(shared_model.state_dict())
-            _, s, h, a, off = unpack_obs(env.observe())
-            ch = policy.choose(s, h, a, off, args["epsilon"], rng)
+            players, s, h, a, off = unpack_obs(env.observe())
+            if any(opp):
+                old = np.asarray([o is not None for o in opp]) & ((players % 2) != learn_team)
+                ch = np.zeros(n_env, np.int64)
+                rows = np.nonzero(~old)[0]
+                ss, hh, aa, oo = subset_obs(s, h, a, off, rows)
+                ch[rows] = policy.choose(ss, hh, aa, oo, args["epsilon"], rng)
+                for p in set(opp[i] for i in np.nonzero(old)[0]):
+                    rows = np.asarray([i for i in np.nonzero(old)[0] if opp[i] == p], np.int64)
+                    ss, hh, aa, oo = subset_obs(s, h, a, off, rows)
+                    ch[rows] = pool[p].choose(ss, hh, aa, oo)
+            else:
+                ch = policy.choose(s, h, a, off, args["epsilon"], rng)
             res = env.step(ch.tolist(), True)
+            for (i, _w, _g, _m) in res:
+                if league > 0:
+                    assign(i)
             rounds += len(res)
             steps += len(ch)
             if env.num_samples() >= send_size:
@@ -132,23 +205,25 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
 # ----------------------------------------------------------------------------- evaluator
 
 def evaluator_main(run_dir: str, args: dict, stop):
+    """Duplicate-deal evaluation of every new checkpoint. The deals are the same at every
+    evaluation, so changes between checkpoints are not hidden by the luck of the cards."""
     try:
-        from .evaluate import evaluate
+        from .duplicate import duplicate_match, NetPlayer, RulePlayer, RandomPlayer
         set_priority("low")
         torch.set_num_threads(max(1, args["eval_threads"]))
         torch.set_grad_enabled(False)
         ckpt = os.path.join(run_dir, "ckpt_latest.pt")
         metrics = os.path.join(run_dir, "metrics.jsonl")
-        base_policy = None
+        base_player = None
         if args.get("base"):
             try:
                 bm, _ = load_checkpoint(args["base"], "cpu")
-                base_policy = BatchPolicy(bm, "cpu")
+                base_player = NetPlayer(bm, "cpu")
             except Exception as e:  # pragma: no cover
                 print("evaluator: cannot load base model:", e, flush=True)
+        deals = max(16, args["eval_rounds"] // 2)
         last_mtime = 0.0
         last_eval = 0.0
-        k = 0
         while not stop.is_set():
             time.sleep(2.0)
             if not os.path.exists(ckpt):
@@ -162,22 +237,22 @@ def evaluator_main(run_dir: str, args: dict, stop):
                 continue
             last_mtime = mt
             last_eval = time.time()
-            pol = BatchPolicy(model, "cpu")
-            opps = [("random", "random"), ("rule", "rule")]
-            if base_policy is not None:
-                opps.append(("base", base_policy))
+            me = NetPlayer(model, "cpu")
+            opps = [("random", RandomPlayer(7), max(16, deals // 4)), ("rule", RulePlayer(), deals)]
+            if base_player is not None:
+                opps.append(("base", base_player, deals))
             row = {"type": "eval", "t": time.time(), "frames": meta.get("frames", 0),
-                   "train_seconds": meta.get("train_seconds", 0)}
-            for name, opp in opps:
+                   "train_seconds": meta.get("train_seconds", 0), "duplicate": True}
+            for name, opp, n in opps:
                 if stop.is_set():
                     return
-                r = evaluate(pol, opp, rounds=args["eval_rounds"], envs=64, seed=1000 + k)
-                row[name] = {"win_rate": r["win_rate"], "score": r["score"], "rounds": r["rounds"]}
-            k += 1
+                r = duplicate_match(me, opp, deals=n, seed=1000)
+                row[name] = {k: r[k] for k in ("win_rate", "score", "score_se", "rounds")}
             with open(metrics, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
             print(f"[eval] frames={row['frames']:.0f} " + " ".join(
-                f"{n}:{row[n]['win_rate']*100:.1f}%/{row[n]['score']:+.2f}" for n, _ in opps), flush=True)
+                f"{n}:{row[n]['win_rate']*100:.1f}%/{row[n]['score']:+.2f}±{row[n]['score_se']:.2f}"
+                for n, _, _ in opps), flush=True)
     except KeyboardInterrupt:
         pass
 
@@ -326,7 +401,8 @@ def run(args):
     stop = ctx.Event()
     adict = dict(envs=args.envs, epsilon=args.epsilon, actor_device=args.actor_device, seed=args.seed,
                  eval_interval=args.eval_interval, eval_rounds=args.eval_rounds, eval_threads=args.eval_threads,
-                 base=args.base)
+                 base=args.base, league=args.league, run_dir=run_dir,
+                 pool=[p for p in args.pool.split(";") if p.strip()])
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)

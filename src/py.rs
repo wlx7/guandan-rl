@@ -87,6 +87,16 @@ impl PyVecEnv {
         (n, PyBytes::new(py, &s), PyBytes::new(py, &h), PyBytes::new(py, &a), PyBytes::new(py, &f32_bytes(&t)))
     }
 
+    /// Only the given seats of environment `i` produce training samples from now on.
+    fn set_learners(&mut self, i: usize, seats: [bool; 4]) {
+        self.inner.set_learners(i, seats);
+    }
+
+    /// Seat to move in every environment.
+    fn current_players(&self) -> Vec<u8> {
+        self.inner.current_players()
+    }
+
     /// A copy of the game running in environment `i`.
     fn game(&self, i: usize) -> PyGame {
         PyGame { g: self.inner.games[i].clone() }
@@ -309,6 +319,20 @@ impl PyRollouts {
 
     fn step(&mut self, choices: Vec<u32>) {
         self.inner.step(&choices);
+    }
+
+    /// Rule-bot choices for the games of the last `observe`.
+    fn rule_choices(&self) -> Vec<u32> {
+        self.inner.rule_choices()
+    }
+
+    /// A copy of game `i`.
+    fn game(&self, i: usize) -> PyGame {
+        PyGame { g: self.inner.games[i].clone() }
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.games.len()
     }
 
     fn rewards(&self, team: u8) -> Vec<f32> {

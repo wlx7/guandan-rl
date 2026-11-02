@@ -78,40 +78,46 @@ def _utf8_stdio():
             pass
 
 
+def make_player(spec, device="cpu", search=""):
+    """'rule' | 'random' | checkpoint path; `search` = 'top_k,samples,depth' enables search."""
+    from .duplicate import NetPlayer, RulePlayer, RandomPlayer, SearchPlayer
+    from .model import load_checkpoint
+    if spec == "rule":
+        return RulePlayer()
+    if spec == "random":
+        return RandomPlayer()
+    m, _ = load_checkpoint(spec, device)
+    if not search:
+        return NetPlayer(m, device)
+    from .search import SearchAgent
+    k, n, d = (int(x) for x in search.split(","))
+    return SearchPlayer(SearchAgent(m, device, top_k=k, samples=n, depth=d))
+
+
 def main():
     _utf8_stdio()
     import argparse
     import torch
-    from .model import load_checkpoint
+    from .duplicate import duplicate_match
 
-    ap = argparse.ArgumentParser(description="Evaluate a Guandan model")
-    ap.add_argument("model")
+    ap = argparse.ArgumentParser(description="Evaluate a Guandan model on duplicate deals "
+                                             "(every deal is played twice with the teams swapped)")
+    ap.add_argument("model", help="checkpoint path, or rule / random")
     ap.add_argument("--opponent", default="rule", help="rule | random | path to checkpoint")
-    ap.add_argument("--rounds", type=int, default=1000)
-    ap.add_argument("--envs", type=int, default=64)
+    ap.add_argument("--deals", type=int, default=500)
+    ap.add_argument("--batch", type=int, default=64, help="deals played side by side")
+    ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--search", default="", help="evaluate with search, e.g. 5,12,14 = top_k,samples,depth")
+    ap.add_argument("--search", default="", help="search for the model, e.g. 5,12,0 = top_k,samples,depth")
+    ap.add_argument("--opponent-search", default="", help="search for the opponent")
     args = ap.parse_args()
     torch.set_grad_enabled(False)
-    m, _ = load_checkpoint(args.model, args.device)
-    a = BatchPolicy(m, args.device)
-    if args.opponent in ("rule", "random"):
-        b = args.opponent
-    else:
-        mb, _ = load_checkpoint(args.opponent, args.device)
-        b = BatchPolicy(mb, args.device)
-    if args.search:
-        from .search import SearchAgent, evaluate_search
-        k, n, d = (int(x) for x in args.search.split(","))
-        ag = SearchAgent(m, args.device, top_k=k, samples=n, depth=d)
-        r = evaluate_search(ag, b, rounds=args.rounds, envs=min(args.envs, 16),
-                            log=lambda t: print(t, flush=True))
-        print(f"search({args.search}) vs {args.opponent}: win {r['win_rate']*100:.1f}%  score {r['score']:+.3f}  "
-              f"({r['rounds']} rounds, {r['seconds']:.0f}s)")
-        return
-    r = evaluate(a, b, rounds=args.rounds, envs=args.envs)
-    print(f"vs {args.opponent}: win {r['win_rate']*100:.1f}%  score {r['score']:+.3f}  "
-          f"double {r['double_rate']*100:.1f}%  ({r['rounds']} rounds, {r['seconds']:.1f}s)")
+    a = make_player(args.model, args.device, args.search)
+    b = make_player(args.opponent, args.device, args.opponent_search)
+    r = duplicate_match(a, b, deals=args.deals, seed=args.seed, batch=args.batch,
+                        log=lambda t: print(t, flush=True))
+    print(f"RESULT vs {args.opponent}: score {r['score']:+.3f} ± {r['score_se']:.3f} levels/round, "
+          f"win {r['win_rate']*100:.1f}%  ({r['deals']} deals = {r['rounds']} rounds, {r['seconds']:.0f}s)", flush=True)
 
 
 if __name__ == "__main__":

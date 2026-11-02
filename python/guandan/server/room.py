@@ -23,15 +23,10 @@ _agents: dict[tuple, GameAgent] = {}
 SEARCH_SETTINGS = {"top_k": 5, "samples": 12, "depth": 14}
 
 
-def get_agent(path: str, think: str = "deep", scoring_name: str = "none") -> GameAgent:
-    key = (path, think, scoring_name)
+def get_agent(path: str, think: str = "deep") -> GameAgent:
+    key = (path, think)
     if key not in _agents:
-        search = None
-        if think == "deep":
-            search = dict(SEARCH_SETTINGS)
-            sc = scoring.get(scoring_name)
-            if sc:
-                search.update(samples=10, scoring={"doubles": sc["doubles"], "cap": sc["cap"]})
+        search = dict(SEARCH_SETTINGS) if think == "deep" else None
         _agents[key] = GameAgent(path, "cpu", search=search)
     return _agents[key]
 
@@ -65,7 +60,8 @@ class Room:
         self.mode = mode
         self.length = length  # quick: random level, independent deals; full: play from 2 to A
         self.think = "fast" if think == "fast" else "deep"
-        self.scoring = scoring_name if scoring.get(scoring_name) else "none"
+        # multipliers only apply to quick games (single deals); the AI plays the same either way
+        self.scoring = scoring_name if (length == "quick" and scoring.get(scoring_name)) else "none"
         self.totals = [0, 0]  # accumulated scores per team when a scoring system is used
         self.timeout = int(timeout)
         self.ai_speed = ai_speed
@@ -303,7 +299,7 @@ class Room:
         seat = self.seats[p]
         g = self.game.copy()
         try:
-            agent = get_agent(seat.model, self.think, self.scoring)
+            agent = get_agent(seat.model, self.think)
             return agent.choose(g)
         except Exception:
             traceback.print_exc()
@@ -312,7 +308,7 @@ class Room:
 
     def hints(self, k=5):
         g = self.game.copy()
-        agent = get_agent(self.hint_model, self.think, self.scoring)
+        agent = get_agent(self.hint_model, self.think)
         ev = agent.evaluate(g)
         out = []
         for (kind, key, cards), q in ev[:k]:
@@ -461,7 +457,7 @@ class Room:
     def make_review(self, p, mv):
         """Teaching mode: compare the human's move with the AI's preferred move."""
         g = self.game.copy()
-        agent = get_agent(self.hint_model, self.think, self.scoring)
+        agent = get_agent(self.hint_model, self.think)
         if agent.searcher is not None:
             ev = agent.searcher.evaluate(g)  # (move, score, net_q, searched), levels
         else:

@@ -33,6 +33,9 @@ pub struct VecEnv {
     pub out_h: Vec<u8>,
     pub out_a: Vec<u8>,
     pub out_t: Vec<f32>,
+    /// Seats whose decisions become training samples (per environment). Seats played by
+    /// an older opponent model are excluded: their values belong to a different policy.
+    learners: Vec<[bool; 4]>,
     rng: Rng,
     random_levels: bool,
 }
@@ -60,6 +63,7 @@ impl VecEnv {
             out_h: vec![],
             out_a: vec![],
             out_t: vec![],
+            learners: vec![[true; 4]; n],
             rng,
             random_levels,
         }
@@ -144,7 +148,7 @@ impl VecEnv {
             self.refresh(i);
             let c = (choices[i] as usize).min(self.moves[i].len() - 1);
             let me = self.games[i].current;
-            if record && self.moves[i].len() > 1 {
+            if record && self.moves[i].len() > 1 && self.learners[i][me as usize] {
                 self.traj[i].push(Step {
                     player: me,
                     state: self.st[i].clone(),
@@ -184,6 +188,7 @@ impl VecEnv {
         self.out_t.len()
     }
 
+    /// (n, states, hists, actions, targets) of finished trajectories.
     pub fn take_samples(&mut self) -> (usize, Vec<u8>, Vec<u8>, Vec<u8>, Vec<f32>) {
         let n = self.out_t.len();
         (
@@ -193,6 +198,16 @@ impl VecEnv {
             std::mem::take(&mut self.out_a),
             std::mem::take(&mut self.out_t),
         )
+    }
+
+    /// Choose which seats of environment `i` produce training samples from now on.
+    pub fn set_learners(&mut self, i: usize, seats: [bool; 4]) {
+        self.learners[i] = seats;
+    }
+
+    /// Seat to move in every environment.
+    pub fn current_players(&self) -> Vec<u8> {
+        self.games.iter().map(|g| g.current).collect()
     }
 
     /// Hand counts left for each seat (for logging).

@@ -139,3 +139,26 @@ def test_multiplier():
     g = _core.Game(3)
     assert g.multiplier([True, True, True, True], 16) == 1
     assert list(g.bombs) == [0, 0, 0, 0]
+
+
+def test_learner_mask_limits_samples():
+    env = _core.VecEnv(8, 3, True)
+    for i in range(8):
+        env.set_learners(i, [True, False, True, False])
+    full = _core.VecEnv(8, 3, True)
+    for _ in range(2000):
+        _, _, _, _, off = env.observe()
+        env.step([0] * 8, True)
+        full.observe()
+        full.step([0] * 8, True)
+    n_masked = env.take_samples()[0]
+    n_full = full.take_samples()[0]
+    assert 0 < n_masked < n_full
+
+
+def test_duplicate_deals_cancel_for_identical_players():
+    from guandan.duplicate import duplicate_match, RulePlayer, RandomPlayer
+    same = duplicate_match(RulePlayer(), RulePlayer(), deals=12, batch=12)
+    assert same["score"] == 0.0  # same deterministic player on both sides: every deal cancels
+    r = duplicate_match(RulePlayer(), RandomPlayer(1), deals=24, batch=12)
+    assert r["score"] > 0.5 and r["rounds"] == 48

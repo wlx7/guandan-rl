@@ -123,6 +123,14 @@ impl Rollouts {
         }
     }
 
+    /// Choices of the rule bot for the games returned by the last `observe`.
+    pub fn rule_choices(&self) -> Vec<u32> {
+        self.active
+            .iter()
+            .map(|&i| crate::bot::rule_choose(&self.games[i], &self.moves[i]) as u32)
+            .collect()
+    }
+
     /// Score of finished games for `team` under `rules` (NaN for unfinished ones).
     pub fn scores(&self, team: u8, rules: &ScoreRules) -> Vec<f32> {
         (0..self.games.len())
