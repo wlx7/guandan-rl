@@ -54,6 +54,11 @@ def build_parser():
     ap.add_argument("--league", type=float, default=0.5,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
+    ap.add_argument("--search-actors", type=int, default=0,
+                    help="self-play processes that label the top candidate moves with search values (expert iteration)")
+    ap.add_argument("--search-envs", type=int, default=64, help="matches per search actor")
+    ap.add_argument("--search-cfg", default="5,12,14", help="top_k,samples,depth of the search used for labels")
+    ap.add_argument("--search-share", type=float, default=0.5, help="share of each batch drawn from search labels")
     ap.add_argument("--reuse", type=float, default=1.0, help="average times each sample is trained on")
     ap.add_argument("--buffer", type=int, default=200_000)
     ap.add_argument("--save-interval", type=float, default=300, help="seconds between checkpoints")
@@ -198,6 +203,72 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                         continue
                 rounds = 0
                 steps = 0
+    except KeyboardInterrupt:
+        pass
+
+
+def search_actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
+    """Expert iteration: play with search and label the network's top candidates of every
+    decision with their search values (average play-out results in sampled worlds). These
+    targets are far less noisy than single-round Monte-Carlo returns and cover exactly the
+    alternatives the network has to rank, which pure DMC almost never tries."""
+    try:
+        from .search import SearchAgent
+        set_priority("low")
+        torch.set_num_threads(1)
+        torch.set_grad_enabled(False)
+        dev = args["actor_device"]
+        if dev == "cuda" and not torch.cuda.is_available():
+            dev = "cpu"
+        model = GuandanNet(ModelConfig(**cfg)).to(dev)
+        model.eval()
+        k, n, d = (int(x) for x in args["search_cfg"].split(","))
+        searcher = SearchAgent(model, dev, top_k=k, samples=n, depth=d, prior=0.0)
+        n_env = args["search_envs"]
+        env = _core.VecEnv(n_env, args["seed"] * 1000 + 500 + aid * 7919 + int(time.time()), True)
+        rng = np.random.default_rng(args["seed"] * 100 + 50 + aid + int(time.time()))
+        local_v = -1
+        rounds = steps = 0
+        S, H, A, T = [], [], [], []
+        while not stop.is_set():
+            if version.value != local_v:
+                local_v = version.value
+                model.load_state_dict(shared_model.state_dict())
+            _, s, h, a, off = unpack_obs(env.observe())
+            n_moves = np.diff(off)
+            ch = np.zeros(n_env, np.int64)
+            multi = np.nonzero(n_moves > 1)[0]
+            if len(multi):
+                # a few games per search call: positions where a player leads can have hundreds
+                # of legal moves, and every simulated world encodes all of them
+                chunk = max(1, 768 // (k * n))
+                results = []
+                for c in range(0, len(multi), chunk):
+                    results += searcher.evaluate_many([env.game(int(i)) for i in multi[c:c + chunk]])
+                for i, res in zip(multi, results):
+                    searched = [r for r in res if r[3]]
+                    ch[i] = searched[0][0] if rng.random() >= 0.1 else searched[int(rng.integers(len(searched)))][0]
+                    for mi, score, _q, _ in searched:
+                        S.append(s[i])
+                        H.append(h[i])
+                        A.append(a[off[i] + mi])
+                        T.append(score)  # levels, like round outcomes
+            res = env.step(ch.tolist(), False)
+            rounds += len(res)
+            steps += n_env
+            if len(T) >= 2048:
+                s_p = np.packbits(np.stack(S), axis=1)
+                h_p = np.packbits(np.stack(H).reshape(len(T), H_FLAT), axis=1)
+                a_p = np.packbits(np.stack(A), axis=1)
+                t = np.asarray(T, np.float32)
+                S, H, A, T = [], [], [], []
+                while not stop.is_set():
+                    try:
+                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps), timeout=1.0)
+                        break
+                    except queue_mod.Full:
+                        continue
+                rounds = steps = 0
     except KeyboardInterrupt:
         pass
 
@@ -402,10 +473,15 @@ def run(args):
     adict = dict(envs=args.envs, epsilon=args.epsilon, actor_device=args.actor_device, seed=args.seed,
                  eval_interval=args.eval_interval, eval_rounds=args.eval_rounds, eval_threads=args.eval_threads,
                  base=args.base, league=args.league, run_dir=run_dir,
-                 pool=[p for p in args.pool.split(";") if p.strip()])
+                 pool=[p for p in args.pool.split(";") if p.strip()],
+                 search_envs=args.search_envs, search_cfg=args.search_cfg)
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
+        p.start()
+        procs.append(p)
+    for i in range(args.search_actors):
+        p = ctx.Process(target=search_actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
         p.start()
         procs.append(p)
     ev = ctx.Process(target=evaluator_main, args=(run_dir, adict, stop), daemon=True)
@@ -422,6 +498,8 @@ def run(args):
     if device.startswith("cuda"):
         set_priority("high")
     buf = Replay(args.buffer, device)
+    sbuf = Replay(max(20_000, args.buffer // 2), device) if args.search_actors else None
+    s_received = 0
     busy = 0.0
     received = 0
     trained = 0
@@ -464,8 +542,13 @@ def run(args):
                         item = q.get_nowait()
                 except queue_mod.Empty:
                     break
-                _, s_p, h_p, a_p, t, r_cnt, st_cnt = item
+                src, s_p, h_p, a_p, t, r_cnt, st_cnt = item
                 t = t / 3.0
+                if src < 0 and sbuf is not None:  # search labels
+                    sbuf.add(s_p, h_p, a_p, t)
+                    s_received += len(t)
+                    got += 1
+                    continue
                 buf.add(s_p, h_p, a_p, t)
                 received += len(t)
                 frames += len(t)
@@ -478,7 +561,13 @@ def run(args):
             budget = 0
             tb = time.time()
             while buf.size >= args.batch * 4 and trained < received * args.reuse and budget < 50:
-                st, ht, at, tt = buf.sample(args.batch)
+                if sbuf is not None and sbuf.size >= 4096:
+                    ns = int(args.batch * args.search_share)
+                    st, ht, at, tt = buf.sample(args.batch - ns)
+                    s2, h2, a2, t2 = sbuf.sample(ns)
+                    st, ht, at, tt = torch.cat([st, s2]), torch.cat([ht, h2]), torch.cat([at, a2]), torch.cat([tt, t2])
+                else:
+                    st, ht, at, tt = buf.sample(args.batch)
                 with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
                     pred = model(st, ht, at)
                 loss = torch.nn.functional.mse_loss(pred.float(), tt)
@@ -512,6 +601,7 @@ def run(args):
                        "loss": loss_acc / max(1, loss_n), "updates": n_updates,
                        "buffer": buf.size, "train_seconds": train_seconds,
                        "learner_busy": busy / dt,
+                       "search_labels": s_received,
                        "alive": sum(p.is_alive() for p in procs[:-1])}
                 log_line(metrics, row)
                 print(f"[train] frames={frames:,} fps={row['fps']:.0f} loss={row['loss']:.4f} "
