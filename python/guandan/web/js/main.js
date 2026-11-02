@@ -63,7 +63,7 @@ async function viewHome() {
 
 // ---------------------------------------------------------------- setup
 async function viewSetup() {
-  const cfg = { think: 'deep', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
+  const cfg = { think: 'fast', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
   let models = [];
   let room = null;
   try { [models, room] = await Promise.all([api.get('/api/models'), api.get('/api/room')]); } catch (e) { toast(e.message, 'err'); }
@@ -133,8 +133,8 @@ async function viewSetup() {
               '倍数只影响每局结算的积分，AI 的打法不变，仍以赢下本局、多升级为目标。') : null) : null,
           h('div', { class: 'panel' }, h('h2', {}, 'AI 思考方式'),
             h('div', { class: 'choice-row' },
-              choice(cfg.think === 'deep', '深度思考', '推荐。网络先挑出最好的几手，再在随机推测的对手手牌里各模拟打下去比较结果，更强，每步多想不到一秒。', () => { cfg.think = 'deep'; render(); }),
-              choice(cfg.think === 'fast', '快速', '只用神经网络直接出牌，几乎不用等待，水平稍弱。', () => { cfg.think = 'fast'; render(); }),
+              choice(cfg.think === 'fast', '神经网络', '推荐。直接用训练好的网络出牌，不用等待。对随包模型这是最强的方式。', () => { cfg.think = 'fast'; render(); }),
+              choice(cfg.think === 'deep', '推演搜索（实验）', '网络先挑出最好的几手，再在随机推测的对手手牌里各模拟打下去比较。对训练不久的模型有帮助；对随包模型反而略弱，每步也要多想半秒左右。', () => { cfg.think = 'deep'; render(); }),
             )),
           h('div', { class: 'panel' }, h('h2', {}, 'AI 与玩家'),
             h('div', { class: 'field' }, h('label', {}, 'AI 模型'), models.length ? modelSelect(cfg.model, (v) => { cfg.model = v; }) : h('div', { class: 'dim' }, '还没有模型：请先到训练中心训练，或下载 Release 中的模型。')),

@@ -177,7 +177,7 @@ export function mountTable(app) {
     const line2 = s.length === 'quick'
       ? `积分 ${s.points[ot]} : ${s.points[1 - ot]}`
       : `第 ${s.match_no} 场  胜场 ${s.score[ot]} : ${s.score[1 - ot]}` + (scored ? `  总分 ${s.totals[ot]} : ${s.totals[1 - ot]}` : '');
-    meta.replaceChildren(h('div', {}, h('b', {}, `${modeName}${s.length === 'quick' ? '快速' : '竞技'}`), `  第 ${s.round_no} 局`), h('div', {}, line2 + (s.think === 'fast' ? '  AI 快速' : '')));
+    meta.replaceChildren(h('div', {}, h('b', {}, `${modeName}${s.length === 'quick' ? '快速' : '竞技'}`), `  第 ${s.round_no} 局`), h('div', {}, line2 + (s.think === 'deep' ? '  AI 推演搜索' : '')));
   }
 
   function renderWaiting() {

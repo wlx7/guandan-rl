@@ -202,7 +202,7 @@ def api_room_create(body: dict):
     room = Room(mode, seats, hint_model=model_default, timeout=int(body.get("timeout", 20)),
                 ai_speed=float(body.get("ai_speed", 1.0)),
                 length="quick" if body.get("length") == "quick" else "full",
-                think="fast" if body.get("think") == "fast" else "deep",
+                think="deep" if body.get("think") == "deep" else "fast",
                 scoring_name=body.get("scoring") or "none")
     STATE["room"] = room
     token = None

@@ -11,6 +11,18 @@ def home():
     return h
 
 
+_RESERVED = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
+
+
+def safe_run_name(name: str) -> str:
+    """Folder-safe run name. Names like 'aux' or 'con' are reserved devices on Windows and
+    make the folder unreadable for many tools, so they get a suffix."""
+    name = "".join(c for c in name if c.isalnum() or c in "-_.").strip(".")
+    if name.split(".")[0].lower() in _RESERVED:
+        name += "-run"
+    return name
+
+
 def runs_dir():
     d = os.path.join(home(), "runs")
     os.makedirs(d, exist_ok=True)

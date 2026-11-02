@@ -11,7 +11,7 @@ import time
 
 import threading
 
-from ..paths import runs_dir, models_dir
+from ..paths import runs_dir, models_dir, safe_run_name
 from ..proc import run_alive, read_pid, kill_tree, wait_gone, pid_alive
 
 _procs: dict[str, subprocess.Popen] = {}
@@ -94,14 +94,14 @@ def list_runs():
 
 def start_run(opts: dict):
     name = opts.get("name") or time.strftime("run-%Y%m%d-%H%M%S")
-    name = "".join(c for c in name if c.isalnum() or c in "-_.") or time.strftime("run-%Y%m%d-%H%M%S")
+    name = safe_run_name(name) or time.strftime("run-%Y%m%d-%H%M%S")
     busy = active_runs()
     if busy:
         raise ValueError(f"训练「{busy[0]}」正在运行。显卡和内存只够跑一个训练，请先停止它再开始新的训练。")
     args = [sys.executable, "-m", "guandan.train", "--name", name]
     mapping = {
         "preset": "--preset", "base": "--base", "device": "--device", "actor_device": "--actor-device",
-        "actors": "--actors", "envs": "--envs", "batch": "--batch", "lr": "--lr", "epsilon": "--epsilon", "league": "--league",
+        "actors": "--actors", "envs": "--envs", "batch": "--batch", "lr": "--lr", "epsilon": "--epsilon", "league": "--league", "aux": "--aux",
         "eval_interval": "--eval-interval", "eval_rounds": "--eval-rounds", "max_hours": "--max-hours",
         "save_interval": "--save-interval",
     }

@@ -23,7 +23,7 @@ _agents: dict[tuple, GameAgent] = {}
 SEARCH_SETTINGS = {"top_k": 5, "samples": 24, "depth": 14}
 
 
-def get_agent(path: str, think: str = "deep") -> GameAgent:
+def get_agent(path: str, think: str = "fast") -> GameAgent:
     key = (path, think)
     if key not in _agents:
         search = dict(SEARCH_SETTINGS) if think == "deep" else None
@@ -52,14 +52,14 @@ class Seat:
 
 class Room:
     def __init__(self, mode: str, seats: list[dict], hint_model: str | None, timeout: int = 20,
-                 ai_speed: float = 1.0, seed: int | None = None, length: str = "full", think: str = "deep",
+                 ai_speed: float = 1.0, seed: int | None = None, length: str = "full", think: str = "fast",
                  scoring_name: str = "none"):
         assert mode in ("teach", "real")
         assert length in ("quick", "full")
         self.id = secrets.token_hex(3)
         self.mode = mode
         self.length = length  # quick: random level, independent deals; full: play from 2 to A
-        self.think = "fast" if think == "fast" else "deep"
+        self.think = "deep" if think == "deep" else "fast"
         # multipliers only apply to quick games (single deals); the AI plays the same either way
         self.scoring = scoring_name if (length == "quick" and scoring.get(scoring_name)) else "none"
         self.totals = [0, 0]  # accumulated scores per team when a scoring system is used

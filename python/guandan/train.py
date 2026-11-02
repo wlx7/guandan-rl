@@ -7,6 +7,9 @@
   opposing team is played by an earlier version of the network; only the latest
   network's decisions become samples. In a 2+2 hour A/B test it lost to plain self-play,
   mostly because self-play produced twice as many samples per hour.
+* Auxiliary task (`--aux`, on by default): the network also predicts the other players'
+  hands from its state encoding (labels exist only in training). In a 2+2 hour A/B test
+  it beat plain DMC by 0.39 levels per round head-to-head.
 * Optional search labels (`--search-actors`, off by default, experimental).
 * The learner regresses Q(s, a) onto these Monte-Carlo returns.
 * An evaluator process periodically measures the latest checkpoint on duplicate deals
@@ -34,7 +37,7 @@ from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
                     HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params)
 from .agents import BatchPolicy, unpack_obs, subset_obs
-from .paths import runs_dir
+from .paths import runs_dir, safe_run_name
 
 H_FLAT = HIST_LEN * HIST_DIM
 
@@ -54,7 +57,7 @@ def build_parser():
     ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
-    ap.add_argument("--aux", type=float, default=0.0,
+    ap.add_argument("--aux", type=float, default=0.25,
                     help="weight of the auxiliary loss that predicts the other players' hands (0 = off)")
     ap.add_argument("--search-actors", type=int, default=0,
                     help="self-play processes that label the top candidate moves with search values (expert iteration)")
@@ -408,6 +411,7 @@ def other_active_runs(exclude=None):
 
 def run(args):
     from .proc import run_alive, write_pid, remove_pid, resource_limits
+    args.name = safe_run_name(args.name) or time.strftime("run-%Y%m%d-%H%M%S")
     run_dir = os.path.join(runs_dir(), args.name)
     os.makedirs(run_dir, exist_ok=True)
     if run_alive(run_dir):
