@@ -7,7 +7,7 @@
 ## 功能
 
 - **完整的掼蛋规则**：逢人配、三带二、顺子、三连对、钢板、各类炸弹、同花顺、天王炸，进贡 / 还贡 / 抗贡、接风、双上升三级、过 A、打 A 三次不过退回 2。详见 [规则说明](docs/RULES.md)。
-- **纯强化学习**：深度蒙特卡洛（DMC）自对弈，不用任何人类棋谱或手写策略训练。每个 AI 只能看到自己的手牌和公开的出牌记录。随包模型只用网络时对规则 AI 每局胜率 78.8%。详见 [训练说明](docs/TRAINING.md) 和 [模型说明](docs/MODEL.md)。
+- **纯强化学习**：深度蒙特卡洛（DMC）自对弈，不用任何人类棋谱或手写策略训练。每个 AI 只能看到自己的手牌和公开的出牌记录。随包模型只用网络时对规则 AI 每局胜率 83.7%。详见 [训练说明](docs/TRAINING.md) 和 [模型说明](docs/MODEL.md)。
 - **辅助任务训练**：训练时让网络顺便预测其他三家的手牌（参考开源的 DanLM / DanKS），实测比普通训练每局多赢约 0.4 级。
 - **推演搜索（实验）**：出牌前随机推测对手手牌、把网络认为最好的几手在 24 个“可能的世界”里推演下去。对训练不久的模型很有用，对随包模型反而略差，因此默认关闭。
 - **复式评估**：评估时每副牌打两遍、双方交换座位，并给出误差范围，模型之间的差距不会被牌运淹没。
@@ -33,14 +33,14 @@
 
 1. 从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `install_windows.bat`、`install_windows.ps1`、`start_windows.bat`、`train_windows.bat`，放进同一个文件夹（例如 `D:\guandan`）。
 2. 双击 `install_windows.bat`。它会自动：
-   - 安装 [uv](https://github.com/astral-sh/uv) 和 Python 3.12（放在该文件夹的 `.venv` 里，不影响系统）；
+   - 安装 [uv](https://github.com/astral-sh/uv) 和 Python 3.12。从 v1.5.1 起，Python、下载缓存、虚拟环境（`.venv`）和训练数据（`guandan_data`）**全部放在这个文件夹里**，不会占用 C 盘（CUDA 版 PyTorch 约 5 GB，建议放在空间充足的盘）；
    - 检测 NVIDIA 显卡并安装对应的 **CUDA 版 PyTorch**（依次尝试 cu126 / cu124 / cu121 / cu118，失败自动换国内镜像，没有显卡则装 CPU 版）；
    - 安装本程序（含训练好的模型）。
 3. 双击 `start_windows.bat`，浏览器会自动打开 `http://127.0.0.1:8000`。
 
 第一次启动时 Windows 防火墙会询问是否允许 Python 访问网络，请勾选“专用网络”，局域网里的其他设备才能连进来。从网上下载的 `.bat` 如果被 SmartScreen 拦下，点“更多信息 → 仍要运行”。
 
-安装时的输出保存在 `install_log.txt`。以后有新版本，再双击一次 `install_windows.bat` 即可升级（已装好的 PyTorch 会被跳过）。
+安装时的输出保存在 `install_log.txt`。以后有新版本，再双击一次 `install_windows.bat` 即可升级（已装好的 PyTorch 会被跳过）。不想要了，直接删除整个文件夹即可。
 
 ### Linux / macOS
 

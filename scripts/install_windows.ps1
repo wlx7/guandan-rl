@@ -1,4 +1,4 @@
-﻿param([switch]$Quiet)
+﻿param([switch]$Quiet, [switch]$ReuseCache)
 # 掼蛋 AI 一键安装：uv + Python 3.12 虚拟环境 + PyTorch（自动选择 CUDA 版本）+ guandan-rl
 $ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
@@ -8,29 +8,38 @@ Start-Transcript -Path $log -Force | Out-Null
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Yellow }
 $py = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 $tuna = 'https://pypi.tuna.tsinghua.edu.cn/simple'
+# Everything stays inside this folder: uv, the Python interpreter, the download cache and the
+# training data. Put the folder on any drive (e.g. D:\guandan) and nothing lands on C:.
+$uvHome = Join-Path $PSScriptRoot '.uv'
+# -ReuseCache: take packages from the user's existing uv cache (used once when moving an
+# older installation, so that PyTorch is copied instead of downloaded again)
+if (-not $ReuseCache) { $env:UV_CACHE_DIR = Join-Path $uvHome 'cache' }
+$env:UV_PYTHON_INSTALL_DIR = Join-Path $uvHome 'python'
+$env:UV_INSTALL_DIR = Join-Path $uvHome 'bin'
+$env:UV_NO_MODIFY_PATH = '1'
+$env:GUANDAN_HOME = Join-Path $PSScriptRoot 'guandan_data'
 try {
-  $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+  $env:Path = "$env:UV_INSTALL_DIR;$env:USERPROFILE\.local\bin;$env:Path"
   Step '1/4 安装 uv（快速的 Python 包管理器）'
   if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     try { Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression } catch { Write-Host $_ }
-    $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
   }
   if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     $zip = Join-Path $env:TEMP 'uv.zip'
     Invoke-WebRequest 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip' -OutFile $zip
-    New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.local\bin" | Out-Null
-    Expand-Archive $zip -DestinationPath "$env:USERPROFILE\.local\bin" -Force
+    New-Item -ItemType Directory -Force -Path $env:UV_INSTALL_DIR | Out-Null
+    Expand-Archive $zip -DestinationPath $env:UV_INSTALL_DIR -Force
   }
   uv --version 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { throw 'uv 安装失败' }
 
   Step '2/4 创建 Python 3.12 环境（.venv）'
   if (-not (Test-Path $py)) {
-    uv venv .venv --python 3.12 --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
+    uv venv .venv --python 3.12 --python-preference only-managed --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
     if (-not (Test-Path $py)) {
       Write-Host '官方源下载失败，改用国内镜像'
       $env:UV_PYTHON_INSTALL_MIRROR = 'https://registry.npmmirror.com/-/binary/python-build-standalone'
-      uv venv .venv --python 3.12 --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
+      uv venv .venv --python 3.12 --python-preference only-managed --no-progress 2>&1 | ForEach-Object { "$_" } | Out-Host
     }
   }
   if (-not (Test-Path $py)) { throw 'Python 环境创建失败' }
