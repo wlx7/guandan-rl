@@ -57,7 +57,7 @@ def build_parser():
     ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
-    ap.add_argument("--aux", type=float, default=0.25,
+    ap.add_argument("--aux", type=float, default=1.0,
                     help="weight of the auxiliary loss that predicts the other players' hands (0 = off)")
     ap.add_argument("--ntp", type=float, default=0.0,
                     help="weight of the auxiliary loss that predicts the next move of the history (0 = off)")
