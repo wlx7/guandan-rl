@@ -31,7 +31,7 @@ def _seg_max(q, off):
 
 class SearchAgent:
     def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25,
-                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02, guided=None):
+                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02, guided=None, margin=2.0):
         self.model = model
         self.device = torch.device(device)
         self.policy = BatchPolicy(model, device)
@@ -51,6 +51,12 @@ class SearchAgent:
         # head (its prediction of the other players' hands) instead of uniformly; the value is
         # the floor weight that keeps every player possible for every card
         self.guided = guided if (guided is not None and getattr(model.cfg, "belief", False)) else None
+        # margin (standard errors): the network's own first choice is kept unless another
+        # candidate beats it in the same sampled worlds by more than `margin` standard errors
+        # of the paired difference. One play-out per world is very noisy (a round reacts to
+        # every move), so picking the best noisy average would mostly pick noise.
+        # None restores the old rule: (1 - prior) * average + prior * network value.
+        self.margin = margin
         self.rng = np.random.default_rng()  # weight of the network's own Q in the final score
 
     # ------------------------------------------------------------------ networks
@@ -192,18 +198,36 @@ class SearchAgent:
                     sims.append(x)
                     owner.append((gi, cj))
                     teams.append(team)
+        vals = {}
         if sims:
             values = self._simulate(sims, teams)
-            sums = {}
-            for v, o in zip(values, owner):
-                sums[o] = sums.get(o, 0.0) + float(v)
+            pos = 0
+            for gi, (q, order, cands) in plan.items():
+                n = len(all_worlds[gi])
+                vals[gi] = np.asarray(values[pos:pos + n * len(cands)], np.float64).reshape(len(cands), n)
+                pos += n * len(cands)
         for gi, (q, order, cands) in plan.items():
-            res = []
-            for cj, ci in enumerate(cands):
-                mean = sums[(gi, cj)] / self.samples
-                res.append((int(ci), (1 - self.prior) * mean + self.prior * float(q[ci]), float(q[ci]), True))
-            res.sort(key=lambda r: -r[1])
-            floor = res[-1][1]
+            v = vals[gi]
+            mean = v.mean(1)
+            if self.margin is None:
+                res = [(int(ci), (1 - self.prior) * mean[cj] + self.prior * float(q[ci]), float(q[ci]), True)
+                       for cj, ci in enumerate(cands)]
+                res.sort(key=lambda r: -r[1])
+            else:
+                # paired comparison with the network's first choice (candidate 0), world by world
+                d = v - v[0]
+                se = d.std(1, ddof=1) / np.sqrt(max(1, v.shape[1])) if v.shape[1] > 1 else np.full(len(cands), np.inf)
+                lcb = mean - mean[0] - self.margin * se
+                lcb[0] = 0.0
+                pick = int(np.argmax(lcb)) if lcb.max() > 0 else 0
+                top_q = float(q[cands[0]])
+                res = [(int(ci), top_q + float(mean[cj] - mean[0]), float(q[ci]), True) for cj, ci in enumerate(cands)]
+                chosen = res[pick]
+                rest = sorted([r for j, r in enumerate(res) if j != pick], key=lambda r: -r[1])
+                res = [chosen] + rest
+                if res[0][1] < max(r[1] for r in res):  # keep the chosen move first in the list
+                    res[0] = (res[0][0], max(r[1] for r in res) + 1e-3, res[0][2], True)
+            floor = min(r[1] for r in res)
             # moves the search did not examine keep the network's order, below every searched move
             res += [(int(i), floor - 0.05 - r * 1e-3, float(q[i]), False) for r, i in enumerate(order[self.top_k:])]
             out[gi] = res
