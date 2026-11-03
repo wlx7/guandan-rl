@@ -12,6 +12,19 @@ impl Game {
     /// random from the cards `me` has not seen, keeping each player's card count and the
     /// cards known to be in their hand (received through tribute / return and not played).
     pub fn determinize(&self, me: u8, rng: &mut Rng) -> Game {
+        self.determinize_with(me, None, 0.0, rng)
+    }
+
+    /// Like `determinize`, but every unseen card goes to one of the other players with
+    /// probability guided by `expect[r][t]`: the expected number of copies of card type `t`
+    /// in the hand of the player `r + 1` seats after `me` (e.g. predicted by the network's
+    /// belief head). `floor` keeps every player possible so that a wrong guess is never
+    /// ruled out completely. Card counts and known tribute cards are respected exactly.
+    pub fn determinize_weighted(&self, me: u8, expect: &[[f32; 54]; 3], floor: f32, rng: &mut Rng) -> Game {
+        self.determinize_with(me, Some(expect), floor, rng)
+    }
+
+    fn determinize_with(&self, me: u8, expect: Option<&[[f32; 54]; 3]>, floor: f32, rng: &mut Rng) -> Game {
         let mut g = self.clone();
         let mut pool = unseen(self, me);
         let others: Vec<u8> = (0..4u8).filter(|&p| p != me).collect();
@@ -41,14 +54,49 @@ impl Game {
             }
         }
         rng.shuffle(&mut rest);
-        let mut k = 0;
-        for &q in &others {
-            for _ in 0..left[q as usize] {
-                if k < rest.len() {
-                    new_hands[q as usize][rest[k] as usize] += 1;
-                    k += 1;
+        match expect {
+            None => {
+                let mut k = 0;
+                for &q in &others {
+                    for _ in 0..left[q as usize] {
+                        if k < rest.len() {
+                            new_hands[q as usize][rest[k] as usize] += 1;
+                            k += 1;
+                        }
+                    }
                 }
             }
+            Some(e) => {
+                for &c in &rest {
+                    let mut w = [0f32; 4];
+                    let mut total = 0f32;
+                    for &q in &others {
+                        if left[q as usize] == 0 {
+                            continue;
+                        }
+                        let r = ((q + 4 - me) % 4 - 1) as usize;
+                        let want = (e[r][c as usize] - new_hands[q as usize][c as usize] as f32).max(0.0);
+                        w[q as usize] = want + floor.max(1e-4);
+                        total += w[q as usize];
+                    }
+                    let mut x = rng.uniform() as f32 * total;
+                    let mut pick = others[0];
+                    for &q in &others {
+                        if w[q as usize] <= 0.0 {
+                            continue;
+                        }
+                        pick = q;
+                        if x < w[q as usize] {
+                            break;
+                        }
+                        x -= w[q as usize];
+                    }
+                    new_hands[pick as usize][c as usize] += 1;
+                    left[pick as usize] -= 1;
+                }
+            }
+        }
+        for &q in &others {
             g.hands[q as usize] = new_hands[q as usize];
         }
         g.rng = Rng::new(rng.next_u64());
@@ -327,6 +375,46 @@ mod tests {
             let ow = w.replay_decisions(me, 1000);
             assert_eq!(ow.offsets.len(), ow.chosen.len() + 1);
         }
+    }
+
+    #[test]
+    fn weighted_determinize_keeps_counts_and_follows_beliefs() {
+        let mut rng = Rng::new(17);
+        let g = Game::new(4, Rules::default());
+        let me = g.current;
+        // belief: the next player holds exactly what they really hold
+        let mut e = [[0f32; 54]; 3];
+        for r in 0..3usize {
+            let q = (me as usize + r + 1) % 4;
+            for t in 0..54 {
+                e[r][t] = g.hands[q][t] as f32;
+            }
+        }
+        let mut hits = 0u32;
+        let mut total = 0u32;
+        for _ in 0..20 {
+            let d = g.determinize_weighted(me, &e, 0.01, &mut rng);
+            assert_eq!(d.hands[me as usize], g.hands[me as usize]);
+            for p in 0..4 {
+                assert_eq!(hand_count(&d.hands[p]), hand_count(&g.hands[p]));
+            }
+            for t in 0..54 {
+                let n: u8 = (0..4).map(|p| d.hands[p][t]).sum();
+                let m: u8 = (0..4).map(|p| g.hands[p][t]).sum();
+                assert_eq!(n, m);
+            }
+            for p in 0..4 {
+                if p as u8 == me {
+                    continue;
+                }
+                for t in 0..54 {
+                    hits += d.hands[p][t].min(g.hands[p][t]) as u32;
+                }
+                total += hand_count(&g.hands[p]);
+            }
+        }
+        // with a perfect belief almost every card lands with its real owner
+        assert!(hits as f32 / total as f32 > 0.9, "{} / {}", hits, total);
     }
 
     #[test]

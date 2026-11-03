@@ -31,7 +31,7 @@ def _seg_max(q, off):
 
 class SearchAgent:
     def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25,
-                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02):
+                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02, guided=None):
         self.model = model
         self.device = torch.device(device)
         self.policy = BatchPolicy(model, device)
@@ -47,6 +47,10 @@ class SearchAgent:
         self.belief_last = belief_last
         self.belief_temp = belief_temp
         self.belief_floor = belief_floor
+        # guided (a float, e.g. 0.05): sample the hidden hands from the network's own belief
+        # head (its prediction of the other players' hands) instead of uniformly; the value is
+        # the floor weight that keeps every player possible for every card
+        self.guided = guided if (guided is not None and getattr(model.cfg, "belief", False)) else None
         self.rng = np.random.default_rng()  # weight of the network's own Q in the final score
 
     # ------------------------------------------------------------------ networks
@@ -54,6 +58,19 @@ class SearchAgent:
         return self.policy.q_values(s, h, a, off) * 3.0  # in levels
 
     # ------------------------------------------------------------------ beliefs
+    @torch.no_grad()
+    def _expected_hands(self, s, h):
+        """Expected copies of every card type in the three other hands (players 1, 2, 3 seats
+        after the one to move), from the belief head: [B, 162]."""
+        d = self.device
+        st = torch.from_numpy(np.ascontiguousarray(s)).to(d).float()
+        ht = torch.from_numpy(np.ascontiguousarray(h)).to(d).float()
+        p = torch.sigmoid(self.model.belief_logits(self.model.encode_state(st, ht))).float().cpu().numpy()
+        p = p.reshape(len(p), 3, 54, 2)
+        p1 = p[..., 0]
+        p2 = np.minimum(p[..., 1], p1)
+        return (p1 + p2).reshape(len(p), 162)
+
     def _log_likelihood(self, worlds, mes):
         """log P(recent plays of the other players | world) under the network's soft policy."""
         obs = [w.replay_decisions(me, self.belief_last) for w, me in zip(worlds, mes)]
@@ -143,11 +160,16 @@ class SearchAgent:
             plan[gi] = (q, order, order[: self.top_k])
         # sampled worlds for every game that needs a search
         all_worlds = {}
+        expect = self._expected_hands(s, h) if (self.guided is not None and plan) else None
         for gi in plan:
             g = games[gi]
             base = next(_seed) * 7919
             m = self.samples * max(1, self.belief)
-            all_worlds[gi] = [g.determinize(base + j) for j in range(m)]
+            if expect is not None:
+                e = expect[gi].tolist()
+                all_worlds[gi] = [g.determinize_weighted(base + j, e, self.guided) for j in range(m)]
+            else:
+                all_worlds[gi] = [g.determinize(base + j) for j in range(m)]
         if self.belief > 1 and plan:
             flat = [(gi, w) for gi in plan for w in all_worlds[gi]]
             logw = self._log_likelihood([w for _, w in flat], [games[gi].current for gi, _ in flat])

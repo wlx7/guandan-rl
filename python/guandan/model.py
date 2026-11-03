@@ -27,6 +27,7 @@ class ModelConfig:
     head_layers: int = 3
     preset: str = "medium"
     belief: bool = False  # auxiliary head that predicts the other players' hands (training only)
+    ntp: bool = False  # auxiliary head that predicts the next move of the history (training only)
 
     def to_dict(self):
         return asdict(self)
@@ -71,6 +72,8 @@ class GuandanNet(nn.Module):
         self.head = nn.Sequential(mlp(head), nn.Linear(h // 2, 1))
         if cfg.belief:
             self.belief = nn.Linear(h, HIDDEN_DIM)
+        if cfg.ntp:
+            self.ntp = nn.Linear(cfg.lstm, HIST_DIM)
 
     def add_belief_head(self):
         """Add the auxiliary hidden-hand head to a model trained without it."""
@@ -78,6 +81,18 @@ class GuandanNet(nn.Module):
             self.cfg.belief = True
             self.belief = nn.Linear(self.cfg.hidden, HIDDEN_DIM)
         return self
+
+    def add_ntp_head(self):
+        """Add the auxiliary next-move head (predicts history step t+1 from the LSTM at t)."""
+        if not self.cfg.ntp:
+            self.cfg.ntp = True
+            self.ntp = nn.Linear(self.cfg.lstm, HIST_DIM)
+        return self
+
+    def encode_state_seq(self, state: torch.Tensor, hist: torch.Tensor):
+        """State encoding plus the LSTM output at every history step (for the next-move task)."""
+        out, (hn, _) = self.lstm(hist)
+        return self.state_mlp(torch.cat([state, hn[-1]], dim=-1)), out
 
     def belief_logits(self, z: torch.Tensor) -> torch.Tensor:
         """Logits of the other three hands (108 bits each, as in the state encoding)."""

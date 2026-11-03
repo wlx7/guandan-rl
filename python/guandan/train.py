@@ -59,6 +59,8 @@ def build_parser():
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
     ap.add_argument("--aux", type=float, default=0.25,
                     help="weight of the auxiliary loss that predicts the other players' hands (0 = off)")
+    ap.add_argument("--ntp", type=float, default=0.0,
+                    help="weight of the auxiliary loss that predicts the next move of the history (0 = off)")
     ap.add_argument("--search-actors", type=int, default=0,
                     help="self-play processes that label the top candidate moves with search values (expert iteration)")
     ap.add_argument("--search-envs", type=int, default=64, help="matches per search actor")
@@ -471,6 +473,8 @@ def run(args):
         model = GuandanNet(PRESETS[args.preset])
     if args.aux > 0:
         model.add_belief_head()
+    if args.ntp > 0:
+        model.add_ntp_head()
     cfg = model.cfg
     model.to(device).train()
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -504,7 +508,7 @@ def run(args):
                  eval_interval=args.eval_interval, eval_rounds=args.eval_rounds, eval_threads=args.eval_threads,
                  base=args.base, league=args.league, run_dir=run_dir,
                  pool=[p for p in args.pool.split(";") if p.strip()],
-                 search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux)
+                 search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp)
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
@@ -537,6 +541,7 @@ def run(args):
     steps_total = 0
     loss_acc, loss_n = 0.0, 0
     aux_acc = 0.0
+    ntp_acc = 0.0
     t_start = time.time()
     t_last_log = t_start
     t_last_save = t_start
@@ -600,10 +605,23 @@ def run(args):
                 else:
                     st, ht, at, tt, xt = buf.sample(args.batch)
                 with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
-                    z = model.encode_state(st, ht)
+                    if args.ntp > 0:
+                        z, seq = model.encode_state_seq(st, ht)
+                        nl = model.ntp(seq[:, :-1])
+                    else:
+                        z = model.encode_state(st, ht)
+                        nl = None
                     pred = model.score(z, at)
                     bl = model.belief_logits(z[: len(xt)]) if (xt is not None and args.aux > 0) else None
                 loss = torch.nn.functional.mse_loss(pred.float(), tt)
+                if nl is not None:
+                    # next-move prediction on the history: only pairs of real (non-padding) moves
+                    nxt = ht[:, 1:]
+                    valid = (ht[:, :-1].sum(-1) > 0) & (nxt.sum(-1) > 0)
+                    if valid.any():
+                        ntp_loss = torch.nn.functional.binary_cross_entropy_with_logits(nl[valid].float(), nxt[valid])
+                        ntp_acc += float(ntp_loss.detach())
+                        loss = loss + args.ntp * ntp_loss
                 if bl is not None:
                     aux_loss = torch.nn.functional.binary_cross_entropy_with_logits(bl.float(), xt)
                     aux_acc += float(aux_loss.detach())
@@ -640,6 +658,7 @@ def run(args):
                        "learner_busy": busy / dt,
                        "search_labels": s_received,
                        "aux_loss": aux_acc / max(1, loss_n) if args.aux > 0 else None,
+                       "ntp_loss": ntp_acc / max(1, loss_n) if args.ntp > 0 else None,
                        "alive": sum(p.is_alive() for p in procs[:-1])}
                 log_line(metrics, row)
                 print(f"[train] frames={frames:,} fps={row['fps']:.0f} loss={row['loss']:.4f} "
@@ -649,6 +668,7 @@ def run(args):
                 rounds_at_log = rounds
                 loss_acc, loss_n = 0.0, 0
                 aux_acc = 0.0
+                ntp_acc = 0.0
                 busy = 0.0
                 t_last_log = now
                 if received == 0 and now - t_start > 240:

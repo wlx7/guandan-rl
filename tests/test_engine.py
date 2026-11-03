@@ -202,3 +202,22 @@ def test_hidden_labels_and_belief_head_roundtrip(tmp_path):
     assert m.cfg.belief
     z = m.encode_state(torch.zeros(2, 1550), torch.zeros(2, 24, 140))
     assert m.belief_logits(z).shape == (2, HIDDEN_DIM)
+
+
+def test_guided_search_and_ntp_head():
+    import torch
+    from guandan.model import GuandanNet, PRESETS
+    from guandan.search import SearchAgent
+    g = _core.Game(5)
+    me = g.current
+    d = g.determinize_weighted(3, [0.5] * 162, 0.05)
+    assert d.hand_counts() == g.hand_counts()
+    assert sorted(d.hand(me)) == sorted(g.hand(me))
+    net = GuandanNet(PRESETS["tiny"]).add_belief_head().add_ntp_head().eval()
+    z, seq = net.encode_state_seq(torch.zeros(2, 1550), torch.zeros(2, 24, 140))
+    assert net.ntp(seq).shape == (2, 24, 140)
+    sa = SearchAgent(net, top_k=2, samples=3, depth=2, guided=0.05)
+    assert sa.guided == 0.05
+    with torch.no_grad():
+        res = sa.evaluate_many([g])
+    assert sorted(i for i, *_ in res[0]) == list(range(len(g.legal_moves())))

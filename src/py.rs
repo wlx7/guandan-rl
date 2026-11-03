@@ -144,6 +144,24 @@ impl PyGame {
         PyGame { g: self.g.determinize(me, &mut rng) }
     }
 
+    /// Like determinize, guided by `expect`: 3 x 54 expected copies of every card type in the
+    /// hands of the players 1, 2 and 3 seats after `me` (flattened). See Game::determinize_weighted.
+    #[pyo3(signature = (seed, expect, floor = 0.05, me = None))]
+    fn determinize_weighted(&self, seed: u64, expect: Vec<f32>, floor: f32, me: Option<u8>) -> PyResult<Self> {
+        if expect.len() != 3 * 54 {
+            return Err(PyValueError::new_err("expect must have 162 values"));
+        }
+        let mut e = [[0f32; 54]; 3];
+        for r in 0..3 {
+            for t in 0..54 {
+                e[r][t] = expect[r * 54 + t];
+            }
+        }
+        let mut rng = Rng::new(seed);
+        let me = me.unwrap_or(self.g.current);
+        Ok(PyGame { g: self.g.determinize_weighted(me, &e, floor, &mut rng) })
+    }
+
     fn round_reward(&self, team: u8) -> f32 {
         self.g.round_reward(team)
     }
