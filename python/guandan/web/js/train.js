@@ -21,7 +21,7 @@ export function mountTrain(app) {
   const form = {
     name: `run-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`,
     preset: 'medium', base: '', device: 'auto', actor_device: 'cpu', actors: 4, envs: 64, batch: 0,
-    lr: 0.0002, epsilon: 0.02, league: 0, aux: 1.0, eval_interval: 10, eval_rounds: 400, max_hours: 0,
+    lr: 0, epsilon: 0.02, league: 0, aux: 1.0, eval_interval: 10, eval_rounds: 400, max_hours: 0,
   };
   const root = h('div', { class: 'page' });
   const left = h('div', { class: 'panel' });
@@ -38,7 +38,7 @@ export function mountTrain(app) {
     const cpu = st.info.cpu_count || 4;
     if (st.info.device.cuda) { form.actor_device = 'cuda'; form.actors = 3; form.envs = 256; }
     else { form.actor_device = 'cpu'; form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2))); form.envs = 64; }
-    form.batch = st.info.device.cuda ? 2048 : 512;
+    form.batch = st.info.device.cuda ? 4096 : 512;
     const running = st.runs.find((r) => r.status === 'running');
     st.sel = running ? running.name : (st.runs[0] && st.runs[0].name) || null;
     renderForm();
@@ -85,7 +85,8 @@ export function mountTrain(app) {
         h('details', {}, h('summary', {}, '更多参数'),
           h('div', { class: 'grid2', style: { marginTop: '8px' } },
             h('div', { class: 'field' }, h('label', {}, '批大小'), num('batch', { min: 64, step: 64 })),
-            h('div', { class: 'field' }, h('label', {}, '学习率'), num('lr', { step: 0.00005 })),
+            h('div', { class: 'field' }, h('label', {}, '学习率'), num('lr', { step: 0.00005, min: 0 }),
+              h('span', { class: 'hint' }, '0 为自动：从头训练 2e-4，在已有模型上继续训练 5e-5（实测继续训练时小学习率更好）')),
             h('div', { class: 'field' }, h('label', {}, '探索率 ε'), num('epsilon', { step: 0.005, min: 0, max: 1 })),
             h('div', { class: 'field' }, h('label', {}, '辅助任务权重'), num('aux', { step: 0.25, min: 0, max: 4 }),
               h('span', { class: 'hint' }, '训练时让网络顺便预测其他三家的手牌（对战时不用）。实测明显更强；0 为关闭')),

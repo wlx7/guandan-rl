@@ -51,8 +51,9 @@ def build_parser():
     ap.add_argument("--actor-device", default="auto", help="device for self-play inference: auto|cuda|cpu")
     ap.add_argument("--actors", type=int, default=0, help="self-play processes (0 = auto)")
     ap.add_argument("--envs", type=int, default=0, help="parallel matches per actor (0 = auto)")
-    ap.add_argument("--batch", type=int, default=0, help="0 = auto (2048 on GPU, 512 on CPU)")
-    ap.add_argument("--lr", type=float, default=2e-4)
+    ap.add_argument("--batch", type=int, default=0, help="0 = auto (4096 on GPU, 512 on CPU)")
+    ap.add_argument("--lr", type=float, default=0.0,
+                    help="learning rate; 0 = auto: 2e-4 from scratch, 5e-5 when continuing from a trained model")
     ap.add_argument("--epsilon", type=float, default=0.02, help="share of random exploration moves")
     ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
@@ -442,7 +443,7 @@ def run(args):
     if not args.envs:
         args.envs = 256 if args.actor_device == "cuda" else 64
     if not args.batch:
-        args.batch = 2048 if device.startswith("cuda") else 512
+        args.batch = 4096 if device.startswith("cuda") else 512
     lim = resource_limits(args.actor_device)
     if args.actors > lim["max_actors"]:
         print(f"actors {args.actors} -> {lim['max_actors']} (limited by GPU memory / RAM)", flush=True)
@@ -477,7 +478,10 @@ def run(args):
         model.add_ntp_head()
     cfg = model.cfg
     model.to(device).train()
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # a trained model is fine-tuned with a smaller step (hill-climb round 4: 5e-5 beat 2e-4 by
+    # +0.10 levels/round when continuing from a strong model)
+    lr = args.lr or (5e-5 if args.base else 2e-4)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
     use_amp = device.startswith("cuda") and not args.no_amp
     if device.startswith("cuda"):
         torch.backends.cudnn.benchmark = True
@@ -485,8 +489,9 @@ def run(args):
     if resume_opt is not None:
         try:
             opt.load_state_dict(resume_opt)
-            for g in opt.param_groups:
-                g["lr"] = args.lr
+            if args.lr:  # otherwise keep the learning rate the run was started with
+                for g in opt.param_groups:
+                    g["lr"] = args.lr
         except Exception:
             pass
 
@@ -553,7 +558,7 @@ def run(args):
     sync_every = 10
     n_updates = 0
     print(f"training {args.name}: preset={cfg.preset} params={count_params(model):,} device={device} "
-          f"actors={args.actors}x{args.envs} on {args.actor_device} batch={args.batch}", flush=True)
+          f"actors={args.actors}x{args.envs} on {args.actor_device} batch={args.batch} lr={opt.param_groups[0]['lr']:g}", flush=True)
 
     interrupted = {"flag": False}
 
