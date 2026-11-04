@@ -11,6 +11,7 @@
 # 可选环境变量：ACTORS（自对弈进程数，默认用 bench 测出的最快值，否则 3）、BASE（起点模型路径）
 set -e
 MODE=${1:-bench}
+HERE=$(cd "$(dirname "$0")" && pwd)
 # AutoDL 自带的“学术加速”（访问 GitHub 更快）；其他平台没有这个文件就跳过
 if [ -f /etc/network_turbo ]; then source /etc/network_turbo >/dev/null 2>&1 || true; fi
 if [ -d /root/autodl-tmp ]; then ROOT=/root/autodl-tmp/guandan; else ROOT=${GUANDAN_DIR:-$HOME/guandan}; fi
@@ -31,16 +32,24 @@ install() {
     echo "镜像里的 PyTorch 不支持显卡，重新安装 CUDA 版 ..."
     "$PY" -m pip install -q --upgrade torch
   fi
+  # the program itself: a wheel next to this script (uploaded by hand) wins; otherwise GitHub
   local url
-  url=$("$PY" - <<'EOF'
+  url=$(ls -t "$HERE"/guandan_rl-*manylinux*.whl "$ROOT"/guandan_rl-*manylinux*.whl 2>/dev/null | head -1 || true)
+  if [ -z "$url" ]; then
+    url=$("$PY" - <<'EOF' || true
 import json, urllib.request
-r = json.load(urllib.request.urlopen("https://api.github.com/repos/wlx7/guandan-rl/releases/latest", timeout=30))
+r = json.load(urllib.request.urlopen("https://api.github.com/repos/wlx7/guandan-rl/releases/latest", timeout=20))
 print(next(a["browser_download_url"] for a in r["assets"] if "manylinux" in a["name"] and a["name"].endswith(".whl")))
 EOF
 )
+  fi
+  if [ -z "$url" ]; then
+    echo "连不上 GitHub。请把 guandan_rl-*-manylinux*.whl 上传到和本脚本相同的文件夹，再运行一次。"
+    exit 1
+  fi
   local have want
   have=$("$PY" -c "import guandan; print(guandan.__version__)" 2>/dev/null || echo none)
-  want=$(echo "$url" | sed -E 's/.*guandan_rl-([0-9.]+)-.*/\1/')
+  want=$(basename "$url" | sed -E 's/guandan_rl-([0-9.]+)-.*/\1/')
   if [ "$have" != "$want" ]; then
     echo "安装 guandan-rl $want ..."
     "$PY" -m pip install -q --force-reinstall --no-deps "$url"
