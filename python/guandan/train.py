@@ -35,7 +35,7 @@ import torch.multiprocessing as mp
 
 from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
-                    HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params)
+                    HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params, widen)
 from .agents import BatchPolicy, unpack_obs, subset_obs
 from .paths import runs_dir, safe_run_name
 
@@ -45,7 +45,8 @@ H_FLAT = HIST_LEN * HIST_DIM
 def build_parser():
     ap = argparse.ArgumentParser(description="Guandan self-play DMC training")
     ap.add_argument("--name", default=time.strftime("run-%Y%m%d-%H%M%S"))
-    ap.add_argument("--preset", default=RECOMMENDED_PRESET, choices=list(PRESETS))
+    ap.add_argument("--preset", default="", choices=[""] + list(PRESETS),
+                    help="model size (default medium); with --base, a bigger size widens the base model first")
     ap.add_argument("--base", default="", help="checkpoint to start from (基准模型)")
     ap.add_argument("--device", default="auto", help="learner device: auto|cuda|cpu")
     ap.add_argument("--actor-device", default="auto", help="device for self-play inference: auto|cuda|cpu")
@@ -470,8 +471,17 @@ def run(args):
     elif args.base:
         model, meta = load_checkpoint(args.base, "cpu")
         print(f"starting from base model {args.base} ({model.cfg.preset})", flush=True)
+        want = PRESETS.get(args.preset)
+        c = model.cfg
+        if want and want.preset != c.preset and want.hidden >= c.hidden and want.lstm >= c.lstm and want.head_layers >= c.head_layers:
+            n0 = count_params(model)
+            model = widen(model, want, seed=args.seed)
+            print(f"widened the base model to {want.preset}: {n0:,} -> {count_params(model):,} parameters "
+                  f"(same play at the start, more capacity to learn)", flush=True)
+        elif want and want.preset != model.cfg.preset:
+            print(f"--preset {args.preset} ignored: a base model can only be widened, so it stays {model.cfg.preset}", flush=True)
     else:
-        model = GuandanNet(PRESETS[args.preset])
+        model = GuandanNet(PRESETS[args.preset or RECOMMENDED_PRESET])
     if args.aux > 0:
         model.add_belief_head()
     if args.ntp > 0:

@@ -81,7 +81,7 @@ export function mountTrain(app) {
         h('div', { class: 'field' }, h('label', {}, '名称'), h('input', { type: 'text', value: form.name, oninput: (e) => { form.name = e.target.value; } }),
           h('span', { class: 'hint' }, '用已有名称会从上次的进度继续训练')),
         h('div', { class: 'field' }, h('span', { class: 'label' }, '模型大小'), presets,
-          h('span', { class: 'hint' }, '从基准模型继续训练时，沿用基准模型的大小')),
+          h('span', { class: 'hint' }, '选了基准模型时：选比它更大的尺寸，会先把基准模型“加宽”成大模型（开局打法和原模型完全一样，保留已学到的东西）再继续训练；否则沿用基准模型的大小')),
         h('div', { class: 'field' }, h('label', {}, '基准模型'), baseSel, h('span', { class: 'hint' }, '在已有模型上继续自对弈，评估时会和它对比胜率。',
           h('a', { href: '#', onclick: (e) => { e.preventDefault(); manageModels(); } }, '整理模型列表'))),
         h('div', { class: 'grid2' },

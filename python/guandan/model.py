@@ -114,6 +114,101 @@ class GuandanNet(nn.Module):
         return self.score(z, actions)
 
 
+@torch.no_grad()
+def widen(small: "GuandanNet", cfg: ModelConfig, noise: float = 0.0, seed: int = 0) -> "GuandanNet":
+    """A bigger network that computes the same function as `small` (Net2Net).
+
+    Every layer is widened by copying random existing units and splitting their outgoing
+    weights between the copies, so the larger model starts from what the small one has
+    learned instead of from scratch; extra head layers are inserted as identity layers
+    (exact after a ReLU). The split between copies is random (the shares still sum to one),
+    which keeps the function exact but gives the copies different gradients, so they can
+    learn different things. `noise` optionally perturbs all weights (relative to their scale)."""
+    s = small.cfg
+    if cfg.hidden < s.hidden or cfg.lstm < s.lstm or cfg.head_layers < s.head_layers:
+        raise ValueError("只能加宽到更大的模型")
+    g = torch.Generator().manual_seed(seed)
+    big = GuandanNet(ModelConfig(hidden=cfg.hidden, lstm=cfg.lstm, head_layers=cfg.head_layers,
+                                 preset=cfg.preset, belief=s.belief, ntp=s.ntp))
+
+    def mapping(n_old, n_new):
+        """(old unit of every new unit, share of the old unit's outgoing weight it carries)"""
+        idx = torch.cat([torch.arange(n_old), torch.randint(0, n_old, (n_new - n_old,), generator=g)])
+        r = 0.5 + torch.rand(n_new, generator=g)
+        total = torch.zeros(n_old).index_add_(0, idx, r)
+        return idx, r / total[idx]
+
+    def jitter(w):
+        if noise > 0:
+            w += torch.randn(w.shape, generator=g) * (noise * float(w.std()) + 1e-8)
+        return w
+
+    def linear(dst, src, out_map, in_parts):
+        """in_parts: list of (old width, new width, mapping or None for unchanged inputs)."""
+        w_old, b_old = src.weight.detach().float(), src.bias.detach().float()
+        rows = out_map[0] if out_map is not None else torch.arange(w_old.shape[0])
+        cols, scale, o_old = [], [], 0
+        for n_old, n_new, m in in_parts:
+            if m is None:
+                cols.append(torch.arange(o_old, o_old + n_old))
+                scale.append(torch.ones(n_old))
+            else:
+                idx, share = m
+                cols.append(o_old + idx)
+                scale.append(share)
+            o_old += n_old
+        cols, scale = torch.cat(cols), torch.cat(scale)
+        w = w_old[rows][:, cols] * scale
+        dst.weight.copy_(jitter(w))
+        dst.bias.copy_(b_old[rows])
+
+    # LSTM: gates (input, forget, cell, output) are stacked blocks of `lstm` rows
+    L0, L1 = s.lstm, cfg.lstm
+    mL = mapping(L0, L1)
+    rows = torch.cat([q * L0 + mL[0] for q in range(4)])
+    colsL, scaleL = mL
+    lo, lb = small.lstm, big.lstm
+    lb.weight_ih_l0.copy_(jitter(lo.weight_ih_l0.detach()[rows].clone()))
+    lb.weight_hh_l0.copy_(jitter(lo.weight_hh_l0.detach()[rows][:, colsL] * scaleL))
+    lb.bias_ih_l0.copy_(lo.bias_ih_l0.detach()[rows])
+    lb.bias_hh_l0.copy_(lo.bias_hh_l0.detach()[rows])
+
+    H0, H1 = s.hidden, cfg.hidden
+    lin_s = [m for m in small.state_mlp if isinstance(m, nn.Linear)]
+    lin_b = [m for m in big.state_mlp if isinstance(m, nn.Linear)]
+    m1 = mapping(H0, H1)
+    linear(lin_b[0], lin_s[0], m1, [(STATE_DIM, STATE_DIM, None), (L0, L1, mL)])
+    mz = mapping(H0, H1)  # the state encoding z, shared by the head and the belief head
+    linear(lin_b[1], lin_s[1], mz, [(H0, H1, m1)])
+
+    head_s = [m for m in small.head[0] if isinstance(m, nn.Linear)]
+    head_b = [m for m in big.head[0] if isinstance(m, nn.Linear)]
+    widths_s = [H0] * (s.head_layers - 1) + [H0 // 2]
+    widths_b = [H1] * (cfg.head_layers - 1) + [H1 // 2]
+    extra = cfg.head_layers - s.head_layers  # identity layers inserted before the last layer
+    prev, prev_old, prev_new = mz, H0, H1
+    j = 0
+    for i, src in enumerate(head_s):
+        if i == len(head_s) - 1:
+            for _ in range(extra):
+                dst = head_b[j]
+                dst.weight.copy_(jitter(torch.eye(prev_new)))
+                dst.bias.zero_()
+                j += 1
+        dst = head_b[j]
+        m = mapping(widths_s[i], widths_b[j])
+        parts = [(prev_old, prev_new, prev)] + ([(ACTION_DIM, ACTION_DIM, None)] if i == 0 else [])
+        linear(dst, src, m, parts)
+        prev, prev_old, prev_new = m, widths_s[i], widths_b[j]
+        j += 1
+    linear(big.head[1], small.head[1], None, [(prev_old, prev_new, prev)])
+    if s.belief:
+        linear(big.belief, small.belief, None, [(H0, H1, mz)])
+    if s.ntp:
+        linear(big.ntp, small.ntp, None, [(L0, L1, mL)])
+    return big
+
+
 def count_params(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
 
