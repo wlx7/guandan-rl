@@ -189,3 +189,21 @@ export function cardCounter(hand, played, level) {
     return { ...c, total, left: Math.max(0, total - seen[c.r]) };
   });
 }
+
+// Straight flushes of one suit that the hand can make (wild cards fill gaps), strongest first.
+// Each is a list of card types to select.
+export function straightFlushes(cards, level, suit) {
+  const wild = level * 4 + 1;
+  const have = new Set(cards.filter((t) => t !== wild && t < 52));
+  const wilds = cards.filter((t) => t === wild).length;
+  const out = [];
+  for (let i = WINDOWS.length - 1; i >= 0; i--) {
+    const w = WINDOWS[i];
+    const types = w.map((r) => r * 4 + suit);
+    const missing = types.filter((t) => !have.has(t));
+    if (missing.length > wilds) continue;
+    // a straight flush made entirely of the wild cards' own suit/rank is still fine
+    out.push(types.map((t) => (have.has(t) ? t : wild)));
+  }
+  return out;
+}

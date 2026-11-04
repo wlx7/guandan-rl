@@ -1,4 +1,4 @@
-import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, rankOf, arrangeHand, cardCounter } from './cards.js';
+import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, SUITS, rankOf, arrangeHand, cardCounter, straightFlushes } from './cards.js';
 import { sound } from './sound.js';
 import { api, toast, h, seatStore, modal } from './util.js';
 
@@ -16,7 +16,7 @@ export function mountTable(app) {
   const S = {
     s: null, prev: null, ws: null, closed: false, retry: 0,
     sel: new Set(), desc: true, reveal: false, hints: null, hintsSeq: -1,
-    arrange: pref.get('arrange', false), counter: pref.get('counter', false),
+    arrange: pref.get('arrange', false), counter: pref.get('counter', false), custom: [], sfPick: {},
     held: null, heldTimer: null, offset: 0, lastTick: -1, raf: 0, busy: false,
     reviewKey: null, resultShown: null, modal: null, layout: null, lastTurnKey: null,
   };
@@ -34,12 +34,13 @@ export function mountTable(app) {
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
   const zoneEls = DIR.map((d) => h('div', { class: `zone ${d}` }));
   const centerMsg = h('div', { class: 'center-msg' });
-  board.append(...zoneEls, ...seatEls, centerMsg);
   const actionbar = h('div', { class: 'actionbar' });
+  const toolsEl = h('div', { class: 'hand-bar' });
+  board.append(...zoneEls, ...seatEls, centerMsg, actionbar);
   const hand = h('div', { class: 'hand' });
-  const handWrap = h('div', { class: 'hand-wrap' }, hand);
+  const handWrap = h('div', { class: 'hand-wrap' }, hand, toolsEl);
   const side = h('div', { class: 'side-panel' });
-  const root = h('div', { class: 'gt' }, topbar, board, actionbar, handWrap, side);
+  const root = h('div', { class: 'gt' }, topbar, board, handWrap, side);
   app.replaceChildren(root);
 
   // ------------------------------------------------------------ socket
@@ -105,6 +106,7 @@ export function mountTable(app) {
     S.s = s;
     if (newRound) {
       S.sel.clear();
+      S.custom = [];
       S.hints = null;
       S.held = null;
       if (S.modal) { S.modal.close(); S.modal = null; }
@@ -204,6 +206,7 @@ export function mountTable(app) {
     seatEls.forEach((e) => e.replaceChildren());
     zoneEls.forEach((e) => e.replaceChildren());
     actionbar.replaceChildren();
+    toolsEl.replaceChildren();
     hand.replaceChildren();
     hand.style.height = '0px';
     const list = h('div', { class: 'seat-list' });
@@ -319,7 +322,8 @@ export function mountTable(app) {
     const s = S.s;
     if (!s) return;
     const kids = [];
-    if (s.status !== 'playing') { actionbar.replaceChildren(); return; }
+    board.classList.toggle('myturn', !!myTurn());
+    if (s.status !== 'playing') { actionbar.replaceChildren(); toolsEl.replaceChildren(); return; }
     if (myTurn()) {
       if (s.deadline) kids.push(h('span', { class: 'timer-text', id: 'timer' }, ''));
       if (s.phase === 0) {
@@ -328,35 +332,71 @@ export function mountTable(app) {
       } else {
         kids.push(
           h('button', { class: 'btn', disabled: s.is_leading || S.busy, onclick: doPass }, '不出'),
-          s.hint_available ? h('button', { class: 'btn', disabled: S.busy, onclick: () => send({ action: 'hint' }) }, 'AI 提示') : null,
+          s.hint_available ? h('button', { class: 'btn', disabled: S.busy, onclick: () => send({ action: 'hint' }) }, '提示') : null,
           h('button', { class: 'btn primary', disabled: S.sel.size === 0 || S.busy, onclick: doPlay }, '出牌'));
       }
     } else if (s.phase < 2) {
       const cur = s.current;
-      kids.push(h('span', { class: 'dim' }, you() < 0 ? `观战中，轮到 ${nameOf(cur)}` : `等待 ${nameOf(cur)}${s.phase === 0 ? ' 还贡' : ' 出牌'}…`));
+      kids.push(h('span', { class: 'wait' }, you() < 0 ? `观战中，轮到 ${nameOf(cur)}` : `等待 ${nameOf(cur)}${s.phase === 0 ? ' 还贡' : ' 出牌'}…`));
     }
-    const tools = h('div', { class: 'tools' });
-    if (you() >= 0 && myHand().length) {
-      tools.appendChild(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); }, disabled: !S.sel.size }, '重选'));
-      tools.appendChild(h('button', { class: 'btn small' + (S.arrange ? ' primary' : ''), title: S.arrange ? '恢复按点数排列' : '把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）',
-        onclick: () => { S.arrange = !S.arrange; pref.set('arrange', S.arrange); S.sel.clear(); renderHand(); renderActions(); } }, S.arrange ? '恢复' : '理牌'));
-      if (!S.arrange) tools.appendChild(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); } }, S.desc ? '大→小' : '小→大'));
+    actionbar.replaceChildren(...kids.filter(Boolean));
+    // tools: a bar over the bottom edge of the hand (left: arrange, middle: straight flushes,
+    // right: selection tools and switches)
+    const L = [], M = [], R = [];
+    const cards = myHand();
+    if (you() >= 0 && cards.length) {
+      const arranged = S.arrange || S.custom.length;
+      L.push(h('button', { class: 'btn small' + (arranged ? ' primary' : ''), title: arranged ? '恢复按点数排列' : '把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）',
+        onclick: () => {
+          if (arranged) { S.arrange = false; S.custom = []; } else S.arrange = true;
+          pref.set('arrange', S.arrange); S.sel.clear(); renderHand(); renderActions();
+        } }, arranged ? '恢复' : '一键理牌'));
+      if (!arranged) L.push(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); renderActions(); } }, S.desc ? '大→小' : '小→大'));
+      const sf = h('span', { class: 'sfpick', title: '选出这个花色的同花顺（再点换下一个）' }, h('span', { class: 'lab' }, '同花顺'));
+      for (let su = 0; su < 4; su++) {
+        const list = straightFlushes(cards, s.level, su);
+        sf.appendChild(h('button', { class: 'sfb' + (su === 1 || su === 3 ? ' red' : ''), disabled: !list.length, onclick: () => pickSF(su) }, SUITS[su]));
+      }
+      M.push(sf);
+      if (S.sel.size) {
+        R.push(h('button', { class: 'btn small', title: '把选中的牌放成一列', onclick: groupSelected }, '理牌'));
+        R.push(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); } }, '重选'));
+      }
     }
     if (you() >= 0 && s.played) {
-      tools.appendChild(h('button', { class: 'btn small' + (S.counter ? ' primary' : ''), title: '显示其他三家还剩哪些牌',
+      R.push(h('button', { class: 'btn small' + (S.counter ? ' primary' : ''), title: '显示其他三家还剩哪些牌',
         onclick: () => { S.counter = !S.counter; pref.set('counter', S.counter); renderCounter(); renderActions(); } }, '记牌器'));
     }
     if (s.mode === 'teach' && you() >= 0) {
-      tools.appendChild(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
+      R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
     }
-    if (tools.childNodes.length) kids.push(tools);
-    actionbar.replaceChildren(...kids.filter(Boolean));
+    toolsEl.replaceChildren(h('div', { class: 'g l' }, ...L), h('div', { class: 'g m' }, ...M), h('div', { class: 'g r' }, ...R));
+  }
+
+  function groupSelected() {
+    if (!S.sel.size) return;
+    const types = selectedTypes();
+    const take = {};
+    for (const t of types) take[t] = (take[t] || 0) + 1;
+    S.custom = S.custom.map((g) => g.filter((t) => { if (take[t] > 0) { take[t]--; return false; } return true; })).filter((g) => g.length);
+    S.custom.push(types);
+    S.sel.clear();
+    renderHand();
+    renderActions();
+  }
+  function pickSF(suit) {
+    const list = straightFlushes(myHand(), S.s.level, suit);
+    if (!list.length) return;
+    const i = (S.sfPick[suit] || 0) % list.length;
+    S.sfPick[suit] = i + 1;
+    selectCards(list[i]);
   }
 
   // ------------------------------------------------------------ hand
-  // Card size for the hand: as large as the space allows. Covered cards in a column show a strip
-  // with rank and suit (sy); columns overlap so that the same strip stays visible (sx >= 0.66 cw).
-  // On a tall narrow screen (phone held upright) the columns wrap into two rows.
+  // Hand layout in the style of mobile card apps: one column per rank (or per combination after
+  // 理牌), columns stand on a common baseline and grow upwards; every covered card shows a strip
+  // with its rank and suit, so each card is a comfortable tap target. On a tall narrow screen
+  // the columns wrap into two rows.
   function handLayout(cols) {
     const vh = window.innerHeight;
     const vw = window.innerWidth;
@@ -366,26 +406,57 @@ export function mountTable(app) {
     const per = Math.ceil(n / rows);
     const rowCols = Array.from({ length: rows }, (_, r) => cols.slice(r * per, (r + 1) * per));
     const stacks = rowCols.map((rc) => Math.max(1, ...rc.map((c) => c.length)));
-    const maxStack = Math.max(...stacks);
-    const W = Math.max(200, handWrap.clientWidth - 24);
-    const maxH = vh * (short ? 0.42 : rows > 1 ? 0.44 : 0.36);
-    const cap = short ? vh * 0.3 : 120;
-    const step = maxStack >= 6 ? 0.2 : 0.25;
-    const unitH = 1.18 + (rows - 1) * 0.55 + stacks.reduce((a, m) => a + (m - 1) * step, 0);
-    let ch = Math.min(cap, maxH / unitH, W / (1 + Math.max(0, per - 1) * 0.66) / 0.7);
-    ch = Math.max(short ? 54 : 58, ch);
-    const cw = Math.round(ch * 0.7);
-    ch = Math.round(ch);
-    let sy = ch * step;
-    const needH = (y) => ch * (1.18 + (rows - 1) * 0.55) + stacks.reduce((a, m) => a + (m - 1) * y, 0);
-    if (needH(sy) > maxH) sy = Math.max(ch * 0.16, (maxH - ch * (1.18 + (rows - 1) * 0.55)) / Math.max(1, stacks.reduce((a, m) => a + m - 1, 0)));
-    const sx = per > 1 ? Math.min(cw * 1.06, (W - cw) / (per - 1)) : 0;
-    const lift = ch * 0.18;
-    const rowTop = [lift];
-    for (let r = 1; r < rows; r++) rowTop.push(rowTop[r - 1] + (stacks[r - 1] - 1) * sy + ch * 0.55);
-    const height = rowTop[rows - 1] + (stacks[rows - 1] - 1) * sy + ch;
+    const W = Math.max(200, handWrap.clientWidth - 16);
+    const cap = short ? Math.min(62, vh * 0.16) : vw < 480 ? 66 : 92;
+    let cw = Math.max(short ? 40 : 42, Math.min(cap, W / (1 + Math.max(0, per - 1) * 0.78)));
+    let ch = cw * 1.4;
+    let sy = ch * 0.34;
+    const maxH = vh * 0.5;
+    // the second row may cover the lower part (big suit pip) of the first row's bottom cards
+    let over = 0;
+    const total = (c, y) => stacks.reduce((a, m) => a + c + (m - 1) * y, 0) - (rows - 1) * over * c;
+    if (rows > 1 && total(ch, sy) > maxH) over = Math.min(0.45, (total(ch, sy) - maxH) / ch);
+    if (total(ch, sy) > maxH) {
+      const minSy = ch * 0.26;
+      const free = stacks.reduce((a, m) => a + m - 1, 0);
+      sy = Math.max(minSy, (maxH - total(ch, 0)) / Math.max(1, free));
+      if (total(ch, sy) > maxH) {
+        const k = maxH / total(ch, sy);
+        cw *= k; ch *= k; sy *= k;
+      }
+    }
+    cw = Math.round(cw); ch = Math.round(ch); sy = Math.round(sy);
+    const sx = per > 1 ? Math.min(cw + 3, (W - cw) / (per - 1)) : 0;
+    const rowTop = [0];
+    for (let r = 1; r < rows; r++) rowTop.push(rowTop[r - 1] + ch + (stacks[r - 1] - 1) * sy - over * ch);
+    const height = rowTop[rows - 1] + ch + (stacks[rows - 1] - 1) * sy;
     const width = (Math.max(...rowCols.map((rc) => rc.length)) - 1) * sx + cw;
-    return { cw, ch, sx, sy, per, rowTop, height, width };
+    return { cw, ch, sx, sy, per, stacks, rowTop, height, width };
+  }
+
+  // Columns to show: manual groups (理牌 on selected cards) first, then the rest either as
+  // combinations (一键理牌) or by rank.
+  function handColumns(cards) {
+    const s = S.s;
+    const left = {};
+    for (const t of cards) left[t] = (left[t] || 0) + 1;
+    const cols = [];
+    const kinds = [];
+    const custom = [];
+    for (const g of S.custom) {
+      const got = [];
+      for (const t of g) if (left[t] > 0) { left[t]--; got.push(t); }
+      if (got.length) { custom.push(got); cols.push(sortCards(got, s.level, true)); kinds.push(got.length > 1 ? '自选' : null); }
+    }
+    S.custom = custom;
+    const rest = [];
+    for (const [t, k] of Object.entries(left)) for (let i = 0; i < k; i++) rest.push(+t);
+    if (S.arrange) {
+      for (const g of arrangeHand(rest, s.level)) { cols.push(g.cards); kinds.push(g.cards.length > 1 ? g.kind : null); }
+    } else {
+      for (const c of columns(rest, s.level, S.desc)) { cols.push(c); kinds.push(null); }
+    }
+    return { cols, kinds };
   }
 
   function renderHand() {
@@ -393,15 +464,14 @@ export function mountTable(app) {
     const cards = myHand();
     const interactive = you() >= 0 && myTurn();
     hand.classList.toggle('disabled', !interactive);
-    hand.classList.toggle('arranged', !!S.arrange);
+    hand.classList.toggle('arranged', !!(S.arrange || S.custom.length));
     if (!cards.length) { hand.replaceChildren(); hand.style.height = '8px'; return; }
     const ids = withIds(cards);
     const byType = {};
     for (const c of ids) (byType[c.t] = byType[c.t] || []).push(c.id);
     for (const id of [...S.sel]) if (!ids.some((c) => c.id === id)) S.sel.delete(id);
-    const groups = S.arrange ? arrangeHand(cards, s.level) : null;
-    const cols = groups ? groups.map((g) => g.cards) : columns(cards, s.level, S.desc);
-    const { cw, ch, sx, sy, per, rowTop, height, width } = handLayout(cols);
+    const { cols, kinds } = handColumns(cards);
+    const { cw, ch, sx, sy, per, stacks, rowTop, height, width } = handLayout(cols);
     hand.style.width = `${width}px`;
     hand.style.height = `${height}px`;
     hand.style.setProperty('--cw', `${cw}px`);
@@ -411,6 +481,7 @@ export function mountTable(app) {
     cols.forEach((col, i) => {
       const row = Math.floor(i / per);
       const x = (i % per) * sx;
+      const y0 = rowTop[row] + (stacks[row] - col.length) * sy;  // columns stand on the row's baseline
       col.forEach((t, j) => {
         used[t] = (used[t] || 0);
         const id = byType[t][used[t]++];
@@ -418,10 +489,10 @@ export function mountTable(app) {
         el.dataset.id = id;
         el.dataset.col = i;
         el.style.left = `${x}px`;
-        el.style.top = `${rowTop[row] + j * sy}px`;
+        el.style.top = `${y0 + j * sy}px`;
         el.style.zIndex = String(row * 1000 + i * 10 + j + 1);
         if (S.sel.has(id)) el.classList.add('sel');
-        if (groups && j === col.length - 1 && groups[i].cards.length > 1) el.dataset.group = groups[i].kind;
+        if (kinds[i] && j === col.length - 1) el.dataset.group = kinds[i];
         els.push(el);
       });
     });
@@ -525,7 +596,7 @@ export function mountTable(app) {
         h('span', { class: 'd' }, m.desc), h('span', { class: 'v' }, (m.q >= 0 ? '+' : '') + m.q.toFixed(2)),
         m.cards.length ? mini : null, h('div', { class: 'bar' }, bar)));
     });
-    side.style.bottom = `${handWrap.offsetHeight + actionbar.offsetHeight + 6}px`;
+    side.style.bottom = `${handWrap.offsetHeight + 8}px`;
     box.style.maxHeight = `${Math.max(180, board.offsetHeight - 20)}px`;
     box.style.overflow = 'auto';
     side.replaceChildren(box);
@@ -764,7 +835,7 @@ export function mountTable(app) {
         row('接风', '出完最后一手牌没人要时，由队友接着出'),
         row('升级', '双上升 3 级，队友三游升 2 级，队友末游升 1 级')),
       h('div', { class: 'sub', style: { marginTop: '14px', textAlign: 'left' } },
-        '操作：点牌或按住拖动选牌，双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。“理牌”把炸弹、同花顺、顺子、三带二等组合各放一列（再点“恢复”回到按点数排列）；“记牌器”显示其他三家还剩的各点数张数。'),
+        '操作：点牌或按住拖动选牌（选中的牌变成金色），双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。选几张牌再点“理牌”，把它们放成一列；“一键理牌”自动把炸弹、同花顺、顺子、三带二等组合各放一列，“恢复”回到按点数排列；“同花顺 ♠♥♣♦”一键选出该花色的同花顺（含逢人配，再点换下一个）；“记牌器”显示其他三家还剩的各点数张数。'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, '知道了')));
     const m = modal(box, { onClose: () => {} });
   }
