@@ -53,9 +53,9 @@ export function mountTable(app) {
   const toolsEl = h('div', { class: 'hand-bar' });
   board.append(...zoneEls, ...seatEls, centerMsg, actionbar);
   const hand = h('div', { class: 'hand' });
-  const handWrap = h('div', { class: 'hand-wrap' }, hand, toolsEl);
+  const handWrap = h('div', { class: 'hand-wrap' }, hand);
   const side = h('div', { class: 'side-panel' });
-  const root = h('div', { class: 'gt' }, topbar, board, handWrap, side);
+  const root = h('div', { class: 'gt' }, topbar, board, handWrap, toolsEl, side);
   app.replaceChildren(root);
 
   // ------------------------------------------------------------ socket
@@ -387,6 +387,7 @@ export function mountTable(app) {
       R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
     }
     toolsEl.replaceChildren(h('div', { class: 'g l' }, ...L), h('div', { class: 'g m' }, ...M), h('div', { class: 'g r' }, ...R));
+    toolsEl.classList.toggle('blank', !(L.length || M.length || R.length));
   }
 
   function groupSelected() {
@@ -427,7 +428,7 @@ export function mountTable(app) {
     let cw = Math.max(short ? 40 : 42, Math.min(cap, W / (1 + Math.max(0, per - 1) * 0.78)));
     let ch = cw * 1.4;
     let sy = ch * 0.34;
-    const maxH = vh * (vh < 420 ? 0.46 : 0.5);
+    const maxH = vh * (vh < 420 ? 0.44 : 0.48);
     // the second row may cover the lower part (big suit pip) of the first row's bottom cards
     let over = 0;
     const total = (c, y) => stacks.reduce((a, m) => a + c + (m - 1) * y, 0) - (rows - 1) * over * c;
@@ -612,7 +613,7 @@ export function mountTable(app) {
         h('span', { class: 'd' }, m.desc), h('span', { class: 'v' }, (m.q >= 0 ? '+' : '') + m.q.toFixed(2)),
         m.cards.length ? mini : null, h('div', { class: 'bar' }, bar)));
     });
-    side.style.bottom = `${handWrap.offsetHeight + 8}px`;
+    side.style.bottom = `${handWrap.offsetHeight + toolsEl.offsetHeight + 8}px`;
     box.style.maxHeight = `${Math.max(180, board.offsetHeight - 20)}px`;
     box.style.overflow = 'auto';
     side.replaceChildren(box);

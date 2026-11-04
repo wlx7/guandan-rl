@@ -301,11 +301,11 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .actionbar { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); display: flex; justify-content: center; align-items: center; gap: 10px; z-index: 7; white-space: nowrap; }
 .actionbar .btn { min-width: 5.2em; padding: 0.5em 1.2em; font-size: 16px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 .actionbar .wait { font-size: 13px; color: var(--text-2); background: rgba(0, 0, 0, 0.3); padding: 3px 12px; border-radius: 999px; }
-/* tool bar laid over the bottom edge of the hand, like mobile card apps */
-.hand-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 34px; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px; padding: 0 max(8px, env(safe-area-inset-left)) max(2px, env(safe-area-inset-bottom)); z-index: 5000; pointer-events: none; background: linear-gradient(0deg, rgba(4, 24, 18, 0.95), rgba(4, 24, 18, 0.78) 70%, rgba(4, 24, 18, 0)); }
+/* tool bar: its own row under the hand (it never covers a card) */
+.hand-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 6px; min-height: 34px; padding: 2px max(8px, env(safe-area-inset-left)) max(4px, env(safe-area-inset-bottom)); z-index: 5; background: linear-gradient(0deg, rgba(4, 24, 18, 0.55), rgba(4, 24, 18, 0)); }
+.hand-bar:empty, .hand-bar.blank { display: none; }
 .hand-bar .g { display: flex; align-items: center; gap: 6px; }
 .hand-bar .g.r { justify-content: flex-end; }
-.hand-bar .btn, .hand-bar .sfpick { pointer-events: auto; }
 .hand-bar .btn.small { padding: 0.28em 0.8em; font-size: 12.5px; background: rgba(5, 28, 22, 0.85); }
 .hand-bar .btn.small.primary { background: linear-gradient(180deg, var(--brass-hi), var(--brass)); }
 .sfpick { white-space: nowrap; display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: rgba(5, 28, 22, 0.75); }
@@ -320,7 +320,7 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .actionbar .tools { display: flex; gap: 8px; align-items: center; }
 .yourturn { font-family: var(--serif); color: var(--brass-hi); font-size: 15px; letter-spacing: 0.08em; }
 
-.hand-wrap { position: relative; padding: 4px max(8px, env(safe-area-inset-left)) 0; z-index: 4; }
+.hand-wrap { position: relative; padding: 4px max(8px, env(safe-area-inset-left)) 2px; z-index: 4; }
 .hand { position: relative; margin: 0 auto; touch-action: none; }
 .hand .card { position: absolute; cursor: pointer; transition: transform 0.16s ease, box-shadow 0.16s, top 0.25s, left 0.25s; }
 /* selected cards are tinted instead of lifted, so they never cover the card above them */
@@ -452,8 +452,8 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   :root { --pcw: 40px; --pch: 56px; --mcw: 18px; --mch: 26px; }
   .counter { left: max(8px, env(safe-area-inset-left)); top: calc(100% + 2px); transform: none; grid-template-columns: repeat(5, auto); }
   .seat.bottom { bottom: 58px; }
-  .hand-bar { grid-template-columns: auto 1fr; height: auto; padding-top: 4px; }
-  .hand-bar .g.m { display: none; }
+  .hand-bar { display: flex; flex-wrap: wrap; justify-content: space-between; row-gap: 4px; }
+  .hand-bar .g.m { order: 3; flex-basis: 100%; justify-content: center; }
   .seat.left, .seat.right { top: 47%; }
   .avatar { width: 40px; height: 40px; font-size: 16px; }
   .zone.top { top: 66px; }
@@ -513,7 +513,6 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .plaque { padding: 1px 12px; min-width: 66px; }
   .plaque .big { font-size: 18px; }
   .plaque .sub { font-size: 9px; }
-  .hand-wrap { padding-bottom: max(4px, env(safe-area-inset-bottom)); }
   /* one row on the right of the top bar, in place of the match info */
   .counter { left: auto; right: calc(max(10px, env(safe-area-inset-right)) + 124px); top: 50%; transform: translateY(-50%); padding: 2px; grid-template-columns: repeat(15, auto); gap: 1px; }
   .topbar.counter-on .meta { visibility: hidden; }
