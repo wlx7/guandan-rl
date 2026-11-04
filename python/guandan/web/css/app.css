@@ -311,6 +311,23 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .hand .card.sel { transform: translateY(calc(var(--ch) * -0.2)); box-shadow: 0 0 0 2px var(--brass-hi), 0 8px 16px rgba(0, 0, 0, 0.45); }
 .hand .card.hl { box-shadow: 0 0 0 2px #7fd8ff, 0 6px 14px rgba(0, 0, 0, 0.35); }
 .hand.disabled .card { cursor: default; }
+.hand .card .idx { flex-direction: row; align-items: baseline; gap: 0.03em; top: 2%; left: 5%; }
+.hand .card .idx .s { margin-top: 0; font-size: calc(var(--cw) * 0.3); }
+.hand .card.joker .idx { writing-mode: horizontal-tb; white-space: nowrap; font-size: calc(var(--cw) * 0.25); top: 4%; }
+.hand .card.joker .idx br { display: none; }
+.hand.arranged .card[data-group]::after { content: attr(data-group); position: absolute; left: 50%; bottom: 3%; transform: translateX(-50%); font-size: max(10px, calc(var(--cw) * 0.17)); line-height: 1.2; padding: 0 4px; border-radius: 4px; background: rgba(15, 59, 47, 0.85); color: #f4e7c4; white-space: nowrap; pointer-events: none; }
+/* card counter (记牌器) */
+.topbar { position: relative; }
+.counter { position: absolute; left: calc(max(12px, env(safe-area-inset-left)) + 62px); top: 50%; transform: translateY(-50%); z-index: 6; display: none; grid-template-columns: repeat(8, auto); gap: 2px; padding: 3px; border-radius: 8px; background: rgba(5, 28, 22, 0.85); border: 1px solid var(--line); pointer-events: none; }
+.counter.on { display: grid; }
+.counter .cc { display: grid; justify-items: center; min-width: 22px; padding: 1px 2px; border-radius: 4px; background: rgba(255, 255, 255, 0.06); line-height: 1.1; }
+.counter .cc .l { font-size: 11px; color: var(--text-2); font-family: var(--serif); font-weight: 700; }
+.counter .cc b { font-size: 14px; color: var(--text); font-family: var(--num, inherit); }
+.counter .cc.lv { background: rgba(233, 207, 146, 0.22); }
+.counter .cc.lv .l { color: var(--brass-hi); }
+.counter .cc.jk .l { color: #cfd8d4; }
+.counter .cc.jk.big .l { color: var(--cinnabar-hi); }
+.counter .cc.zero b { color: var(--text-3); opacity: 0.6; }
 .hand .card.dealing { animation: deal 0.5s cubic-bezier(.2, .8, .3, 1) both; }
 @keyframes deal { from { transform: translate(var(--dx), var(--dy)) rotate(-12deg) scale(0.6); opacity: 0; } }
 
@@ -415,6 +432,8 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
 }
 @media (max-width: 640px) {
   :root { --pcw: 34px; --pch: 48px; --mcw: 18px; --mch: 26px; }
+  .counter { left: max(8px, env(safe-area-inset-left)); top: calc(100% + 2px); transform: none; grid-template-columns: repeat(5, auto); }
+  .seat.left, .seat.right { top: 47%; }
   .avatar { width: 40px; height: 40px; font-size: 16px; }
   .zone.top { top: 66px; }
   .zone.left { left: 64px; top: 44%; }
@@ -446,8 +465,17 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .avatar { width: 36px; height: 36px; font-size: 15px; }
   .zone.top { top: 50px; }
   .seat.left, .seat.right { top: 42%; }
-  .actionbar { min-height: 42px; padding: 2px 10px; }
-  .topbar { padding: 4px 10px 2px; }
+  .actionbar { min-height: 38px; padding: 0 10px; }
+  .actionbar .btn { padding: 0.3em 0.9em; }
+  .topbar { padding: 2px 10px 0; }
+  .plaque { padding: 2px 12px; min-width: 70px; }
+  .plaque .big { font-size: 20px; }
+  .plaque .sub { font-size: 9px; }
+  .hand-wrap { padding-bottom: max(4px, env(safe-area-inset-bottom)); }
+  .counter { top: 2px; transform: none; }
+  .counter .cc { min-width: 19px; }
+  .counter .cc .l { font-size: 10px; }
+  .counter .cc b { font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

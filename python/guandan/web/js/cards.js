@@ -85,3 +85,107 @@ export function miniRow(cards, level, size = 'm', max = 30) {
   for (const t of sortCards(cards, level).slice(0, max)) row.appendChild(cardEl(t, { level, size }));
   return row;
 }
+
+// ---------------------------------------------------------------- 理牌 (one-click arrange)
+// Natural-order windows for straights: A-2-3-4-5 up to 10-J-Q-K-A (rank indices, '2' = 0, 'A' = 12).
+const WINDOWS = [[12, 0, 1, 2, 3], ...Array.from({ length: 9 }, (_, i) => [i, i + 1, i + 2, i + 3, i + 4])];
+
+// Group a hand into playable combinations, one column each: wild cards, 天王炸, bombs, 同花顺,
+// 钢板, 三连对, 顺子, 三带二, 三张, 对子, 单张. Greedy and deterministic; it only rearranges
+// the display, the player still chooses what to play.
+export function arrangeHand(cards, level) {
+  const wild = level * 4 + 1;
+  const cnt = new Array(54).fill(0);
+  let wilds = 0;
+  for (const t of cards) { if (t === wild) wilds++; else cnt[t]++; }
+  const rankCount = (r) => cnt[r * 4] + cnt[r * 4 + 1] + cnt[r * 4 + 2] + cnt[r * 4 + 3];
+  const take = (t) => { cnt[t]--; return t; };
+  const takeRank = (r, n) => {  // n cards of rank r, preferring suits that are not needed elsewhere
+    const out = [];
+    for (let k = 0; k < n; k++) {
+      let best = -1;
+      for (let s = 0; s < 4; s++) if (cnt[r * 4 + s] > 0 && (best < 0 || cnt[r * 4 + s] > cnt[r * 4 + best])) best = s;
+      out.push(take(r * 4 + best));
+    }
+    return out;
+  };
+  const str = (r) => strength(r, level);
+  const groups = [];
+  const add = (kind, cs, order) => groups.push({ kind, cards: cs, order });
+  if (wilds) add('配', Array(wilds).fill(wild), 0);
+  if (cnt[52] === 2 && cnt[53] === 2) add('天王炸', [take(53), take(53), take(52), take(52)], 1);
+  // bombs of 6+ outrank a straight flush: keep them whole
+  for (let r = 0; r < 13; r++) if (rankCount(r) >= 6) add('炸弹', takeRank(r, rankCount(r)), 2);
+  // straight flushes: cheapest first (the fewest pairs / triples / bombs broken; taking one card
+  // from a 5-card bomb still leaves a bomb)
+  const cost = (c) => (c >= 5 ? 0 : c === 4 ? 3 : c === 3 ? 2 : c === 2 ? 1 : 0);
+  for (;;) {
+    let best = null;
+    for (let s = 0; s < 4; s++) {
+      for (const w of WINDOWS) {
+        if (!w.every((r) => cnt[r * 4 + s] > 0)) continue;
+        const pen = w.reduce((a, r) => a + cost(rankCount(r)), 0);
+        if (!best || pen < best.pen || (pen === best.pen && w[4] > best.w[4])) best = { s, w, pen };
+      }
+    }
+    if (!best || best.pen > 4) break;
+    add('同花顺', best.w.map((r) => take(r * 4 + best.s)), 3);
+  }
+  for (let r = 0; r < 13; r++) if (rankCount(r) >= 4) add('炸弹', takeRank(r, rankCount(r)), 2);
+  // plain straights, only from cards that are not part of a pair or triple (at most one broken pair)
+  for (;;) {
+    let best = null;
+    for (const w of WINDOWS) {
+      if (!w.every((r) => rankCount(r) > 0)) continue;
+      const pen = w.reduce((a, r) => a + (rankCount(r) === 1 ? 0 : rankCount(r) === 2 ? 1 : 3), 0);
+      if (!best || pen < best.pen || (pen === best.pen && w[4] > best.w[4])) best = { w, pen };
+    }
+    if (!best || best.pen > 1) break;
+    add('顺子', best.w.map((r) => takeRank(r, 1)[0]), 6);
+  }
+  const ranksWith = (n) => Array.from({ length: 13 }, (_, r) => r).filter((r) => rankCount(r) === n);
+  // 钢板: two triples of consecutive natural ranks (A can follow K or precede 2)
+  const next = (r) => (r === 12 ? 0 : r + 1);
+  for (const r of ranksWith(3)) {
+    const r2 = next(r);
+    if (rankCount(r) === 3 && rankCount(r2) === 3) add('钢板', [...takeRank(r, 3), ...takeRank(r2, 3)], 4);
+  }
+  // 三连对: three pairs of consecutive natural ranks (A-2-3 up to Q-K-A; K-A-2 does not wrap)
+  for (const r of ranksWith(2)) {
+    if (r === 11) continue;
+    const r2 = next(r), r3 = next(r2);
+    if (rankCount(r) === 2 && rankCount(r2) === 2 && rankCount(r3) === 2) {
+      add('三连对', [...takeRank(r, 2), ...takeRank(r2, 2), ...takeRank(r3, 2)], 5);
+    }
+  }
+  // 三带二: each triple takes the weakest remaining pair
+  const triples = ranksWith(3).sort((a, b) => str(b) - str(a));
+  const pairs = ranksWith(2).sort((a, b) => str(a) - str(b));
+  for (const r of triples) {
+    const p = pairs.shift();
+    if (p !== undefined) add('三带二', [...takeRank(r, 3), ...takeRank(p, 2)], 7);
+    else add('三张', takeRank(r, 3), 8);
+  }
+  for (const r of ranksWith(2)) add('对子', takeRank(r, 2), 9);
+  for (const t of [53, 52]) if (cnt[t] === 2) add('对子', [take(t), take(t)], 9);
+  for (let r = 0; r < 13; r++) while (rankCount(r) > 0) add('单张', takeRank(r, 1), 10);
+  for (const t of [53, 52]) while (cnt[t] > 0) add('单张', [take(t)], 10);
+  // display order: by kind, then strongest first
+  const top = (g) => Math.max(...g.cards.map((t) => (t >= 52 ? t - 52 + 14 : str(rankOf(t)))));
+  groups.sort((a, b) => a.order - b.order || b.cards.length - a.cards.length || top(b) - top(a));
+  return groups;
+}
+
+// Cards of every rank not yet seen by this player (not in their hand and not played this round).
+// Returns [{label, left, total, level}] from 大王 down to 2, the level rank right after the jokers.
+export function cardCounter(hand, played, level) {
+  const seen = new Array(15).fill(0);
+  for (const t of hand) seen[rankOf(t)]++;
+  for (const list of played) for (const t of list) seen[rankOf(t)]++;
+  const out = [{ label: '大', r: 14 }, { label: '小', r: 13 }, { label: RANKS[level], r: level, level: true }];
+  for (let r = 12; r >= 0; r--) if (r !== level) out.push({ label: RANKS[r], r });
+  return out.map((c) => {
+    const total = c.r >= 13 ? 2 : 8;
+    return { ...c, total, left: Math.max(0, total - seen[c.r]) };
+  });
+}

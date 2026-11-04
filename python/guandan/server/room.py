@@ -215,6 +215,8 @@ class Room:
         st["last_move"] = dict(self.move_info(*lm), player=g.last_player) if lm else None
         if v >= 0:
             st["hand"] = list(g.hand(v))
+        # cards played this round by each player (public; used by the card counter)
+        st["played"] = [list(g.played(p)) for p in range(4)]
         visible = set()
         if v < 0 or self.mode == "teach":
             visible = {0, 1, 2, 3}

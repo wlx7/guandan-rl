@@ -1,4 +1,4 @@
-import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, rankOf } from './cards.js';
+import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, rankOf, arrangeHand, cardCounter } from './cards.js';
 import { sound } from './sound.js';
 import { api, toast, h, seatStore, modal } from './util.js';
 
@@ -6,11 +6,17 @@ const PLACE = ['头游', '二游', '三游', '末游'];
 const BOMB_WORD = { 8: '炸弹', 9: '同花顺', 10: '天王炸' };
 const DIR = ['bottom', 'right', 'top', 'left'];
 
+const pref = {
+  get(k, d) { try { const v = localStorage.getItem('gd_' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('gd_' + k, JSON.stringify(v)); } catch {} },
+};
+
 export function mountTable(app) {
   const seat = seatStore.get() || { seat: -1, token: null };
   const S = {
     s: null, prev: null, ws: null, closed: false, retry: 0,
     sel: new Set(), desc: true, reveal: false, hints: null, hintsSeq: -1,
+    arrange: pref.get('arrange', false), counter: pref.get('counter', false),
     held: null, heldTimer: null, offset: 0, lastTick: -1, raf: 0, busy: false,
     reviewKey: null, resultShown: null, modal: null, layout: null, lastTurnKey: null,
   };
@@ -22,7 +28,8 @@ export function mountTable(app) {
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
   const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
-  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, helpBtn, soundBtn);
+  const counterEl = h('div', { class: 'counter', title: '记牌器：其他三家手里还剩的牌（不含已出的牌和你的手牌）' });
+  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, helpBtn, soundBtn, counterEl);
   const board = h('div', { class: 'board' });
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
   const zoneEls = DIR.map((d) => h('div', { class: `zone ${d}` }));
@@ -149,7 +156,19 @@ export function mountTable(app) {
     renderCenter();
     renderActions();
     renderHand();
+    renderCounter();
     renderSide();
+  }
+
+  function renderCounter() {
+    const s = S.s;
+    const on = S.counter && s && s.status === 'playing' && you() >= 0 && s.played;
+    counterEl.classList.toggle('on', !!on);
+    if (!on) { counterEl.replaceChildren(); return; }
+    const cells = cardCounter(myHand(), s.played, s.level).map((c) => h('div', {
+      class: 'cc' + (c.level ? ' lv' : '') + (c.r >= 13 ? ' jk' : '') + (c.r === 14 ? ' big' : '') + (c.left === 0 ? ' zero' : ''),
+    }, h('span', { class: 'l' }, c.label), h('b', {}, String(c.left))));
+    counterEl.replaceChildren(...cells);
   }
 
   function renderTop() {
@@ -319,7 +338,13 @@ export function mountTable(app) {
     const tools = h('div', { class: 'tools' });
     if (you() >= 0 && myHand().length) {
       tools.appendChild(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); }, disabled: !S.sel.size }, '重选'));
-      tools.appendChild(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); } }, S.desc ? '大→小' : '小→大'));
+      tools.appendChild(h('button', { class: 'btn small' + (S.arrange ? ' primary' : ''), title: S.arrange ? '恢复按点数排列' : '把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）',
+        onclick: () => { S.arrange = !S.arrange; pref.set('arrange', S.arrange); S.sel.clear(); renderHand(); renderActions(); } }, S.arrange ? '恢复' : '理牌'));
+      if (!S.arrange) tools.appendChild(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); } }, S.desc ? '大→小' : '小→大'));
+    }
+    if (you() >= 0 && s.played) {
+      tools.appendChild(h('button', { class: 'btn small' + (S.counter ? ' primary' : ''), title: '显示其他三家还剩哪些牌',
+        onclick: () => { S.counter = !S.counter; pref.set('counter', S.counter); renderCounter(); renderActions(); } }, '记牌器'));
     }
     if (s.mode === 'teach' && you() >= 0) {
       tools.appendChild(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
@@ -329,13 +354,38 @@ export function mountTable(app) {
   }
 
   // ------------------------------------------------------------ hand
-  function cardSize() {
+  // Card size for the hand: as large as the space allows. Covered cards in a column show a strip
+  // with rank and suit (sy); columns overlap so that the same strip stays visible (sx >= 0.66 cw).
+  // On a tall narrow screen (phone held upright) the columns wrap into two rows.
+  function handLayout(cols) {
     const vh = window.innerHeight;
     const vw = window.innerWidth;
-    let ch = Math.min(118, Math.max(58, vh * 0.15));
-    if (vw < 480) ch = Math.min(ch, 74);
-    if (vh < 520) ch = Math.max(44, vh * 0.125);
-    return { cw: Math.round(ch * 0.7), ch: Math.round(ch) };
+    const short = vh < 560;
+    const n = cols.length;
+    const rows = vh > vw * 1.1 && n > 8 ? 2 : 1;
+    const per = Math.ceil(n / rows);
+    const rowCols = Array.from({ length: rows }, (_, r) => cols.slice(r * per, (r + 1) * per));
+    const stacks = rowCols.map((rc) => Math.max(1, ...rc.map((c) => c.length)));
+    const maxStack = Math.max(...stacks);
+    const W = Math.max(200, handWrap.clientWidth - 24);
+    const maxH = vh * (short ? 0.42 : rows > 1 ? 0.44 : 0.36);
+    const cap = short ? vh * 0.3 : 120;
+    const step = maxStack >= 6 ? 0.2 : 0.25;
+    const unitH = 1.18 + (rows - 1) * 0.55 + stacks.reduce((a, m) => a + (m - 1) * step, 0);
+    let ch = Math.min(cap, maxH / unitH, W / (1 + Math.max(0, per - 1) * 0.66) / 0.7);
+    ch = Math.max(short ? 54 : 58, ch);
+    const cw = Math.round(ch * 0.7);
+    ch = Math.round(ch);
+    let sy = ch * step;
+    const needH = (y) => ch * (1.18 + (rows - 1) * 0.55) + stacks.reduce((a, m) => a + (m - 1) * y, 0);
+    if (needH(sy) > maxH) sy = Math.max(ch * 0.16, (maxH - ch * (1.18 + (rows - 1) * 0.55)) / Math.max(1, stacks.reduce((a, m) => a + m - 1, 0)));
+    const sx = per > 1 ? Math.min(cw * 1.06, (W - cw) / (per - 1)) : 0;
+    const lift = ch * 0.18;
+    const rowTop = [lift];
+    for (let r = 1; r < rows; r++) rowTop.push(rowTop[r - 1] + (stacks[r - 1] - 1) * sy + ch * 0.55);
+    const height = rowTop[rows - 1] + (stacks[rows - 1] - 1) * sy + ch;
+    const width = (Math.max(...rowCols.map((rc) => rc.length)) - 1) * sx + cw;
+    return { cw, ch, sx, sy, per, rowTop, height, width };
   }
 
   function renderHand() {
@@ -343,39 +393,35 @@ export function mountTable(app) {
     const cards = myHand();
     const interactive = you() >= 0 && myTurn();
     hand.classList.toggle('disabled', !interactive);
+    hand.classList.toggle('arranged', !!S.arrange);
     if (!cards.length) { hand.replaceChildren(); hand.style.height = '8px'; return; }
     const ids = withIds(cards);
     const byType = {};
     for (const c of ids) (byType[c.t] = byType[c.t] || []).push(c.id);
     for (const id of [...S.sel]) if (!ids.some((c) => c.id === id)) S.sel.delete(id);
-    const cols = columns(cards, s.level, S.desc);
-    const { cw, ch } = cardSize();
-    const W = handWrap.clientWidth - 24;
-    const n = cols.length;
-    const sx = n > 1 ? Math.min(cw * 1.06, (W - cw) / (n - 1)) : 0;
-    const maxStack = Math.max(...cols.map((c) => c.length));
-    let sy = ch * 0.27;
-    const maxH = window.innerHeight * (window.innerHeight < 520 ? 0.28 : 0.34);
-    if (ch + (maxStack - 1) * sy > maxH) sy = Math.max(ch * 0.16, (maxH - ch) / Math.max(1, maxStack - 1));
-    const lift = ch * 0.22;
-    const totalW = (n - 1) * sx + cw;
-    hand.style.width = `${totalW}px`;
-    hand.style.height = `${lift + ch + (maxStack - 1) * sy}px`;
+    const groups = S.arrange ? arrangeHand(cards, s.level) : null;
+    const cols = groups ? groups.map((g) => g.cards) : columns(cards, s.level, S.desc);
+    const { cw, ch, sx, sy, per, rowTop, height, width } = handLayout(cols);
+    hand.style.width = `${width}px`;
+    hand.style.height = `${height}px`;
     hand.style.setProperty('--cw', `${cw}px`);
     hand.style.setProperty('--ch', `${ch}px`);
     const used = {};
     const els = [];
     cols.forEach((col, i) => {
+      const row = Math.floor(i / per);
+      const x = (i % per) * sx;
       col.forEach((t, j) => {
         used[t] = (used[t] || 0);
         const id = byType[t][used[t]++];
         const el = cardEl(t, { level: s.level });
         el.dataset.id = id;
         el.dataset.col = i;
-        el.style.left = `${i * sx}px`;
-        el.style.top = `${lift + j * sy}px`;
-        el.style.zIndex = String(i * 10 + j + 1);
+        el.style.left = `${x}px`;
+        el.style.top = `${rowTop[row] + j * sy}px`;
+        el.style.zIndex = String(row * 1000 + i * 10 + j + 1);
         if (S.sel.has(id)) el.classList.add('sel');
+        if (groups && j === col.length - 1 && groups[i].cards.length > 1) el.dataset.group = groups[i].kind;
         els.push(el);
       });
     });
@@ -718,7 +764,7 @@ export function mountTable(app) {
         row('接风', '出完最后一手牌没人要时，由队友接着出'),
         row('升级', '双上升 3 级，队友三游升 2 级，队友末游升 1 级')),
       h('div', { class: 'sub', style: { marginTop: '14px', textAlign: 'left' } },
-        '操作：点牌或按住拖动选牌，双击选中同点数的一列，右键清空。回车出牌，空格不出，Esc 取消选择。'),
+        '操作：点牌或按住拖动选牌，双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。“理牌”把炸弹、同花顺、顺子、三带二等组合各放一列（再点“恢复”回到按点数排列）；“记牌器”显示其他三家还剩的各点数张数。'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, '知道了')));
     const m = modal(box, { onClose: () => {} });
   }
