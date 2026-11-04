@@ -2,13 +2,22 @@
 
 纯自对弈强化学习训练的掼蛋 AI，带训练中心与局域网对战。
 
-### Windows 一键安装
+### Windows 免安装版（只打牌）
+
+下载 `guandan_windows.exe`，双击就能打牌、局域网联机，什么都不用装。不能训练。第一次运行如果提示“Windows 已保护你的电脑”，点“更多信息 → 仍要运行”；防火墙询问时勾选“专用网络”。
+
+### Windows 一键安装（可以训练）
 
 1. 下载下面的 `install_windows.bat`、`install_windows.ps1`、`start_windows.bat`、`train_windows.bat`，放进同一个文件夹。
 2. 双击 `install_windows.bat`：自动安装 Python 3.12、CUDA 版 PyTorch（自动匹配显卡驱动）和本程序。
 3. 双击 `start_windows.bat` 打开界面。局域网里的朋友用手机扫牌桌上的二维码即可加入。
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
+
+### v1.7.0
+
+- **新增免安装版 `guandan_windows.exe`**：一个约 40 MB 的文件，双击就能打牌和局域网联机，不用装 Python、PyTorch 等依赖。它用 numpy 运行神经网络（和 PyTorch 的结果误差在百万分之一以内，出牌完全一样），所以不能训练、也没有实验性的“推演搜索”；训练仍用一键安装版。把 exe 放进安装文件夹（如 `D:\guandan`），可以直接用那里的模型。
+- 没装 PyTorch 时（免安装版或只装了程序），训练中心会说明只能对战，不再报错。
 
 ### v1.6.9
 

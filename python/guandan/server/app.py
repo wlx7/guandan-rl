@@ -85,7 +85,11 @@ def index():
 
 @app.get("/api/info")
 def api_info():
-    from ..model import preset_table, RECOMMENDED_PRESET
+    try:
+        from ..model import preset_table, RECOMMENDED_PRESET
+        presets = preset_table()
+    except ImportError:  # portable build: no PyTorch, play only
+        presets, RECOMMENDED_PRESET = [], "medium"
     ips = lan_ips()
     port = STATE["port"]
     return {
@@ -93,7 +97,9 @@ def api_info():
         "lan_urls": [f"http://{ip}:{port}/" for ip in ips],
         "home": home(),
         "device": device_info(),
-        "presets": preset_table(),
+        "presets": presets,
+        "can_train": trainer.can_train(),
+        "portable": trainer.PORTABLE,
         "recommended_preset": RECOMMENDED_PRESET,
         "default_model": default_model(),
         "cpu_count": os.cpu_count(),

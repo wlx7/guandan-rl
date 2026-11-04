@@ -96,7 +96,20 @@ def list_runs():
     return out
 
 
+# the one-file Windows build (PyInstaller) has no PyTorch and cannot start `python -m guandan.train`
+PORTABLE = bool(getattr(sys, "frozen", False))
+
+
+def can_train() -> bool:
+    if PORTABLE:
+        return False
+    import importlib.util
+    return importlib.util.find_spec("torch") is not None
+
+
 def start_run(opts: dict):
+    if not can_train():
+        raise ValueError("这个版本只能对战，不能训练：训练需要 PyTorch。请用完整安装版（install_windows.bat）训练。")
     name = opts.get("name") or time.strftime("run-%Y%m%d-%H%M%S")
     name = safe_run_name(name) or time.strftime("run-%Y%m%d-%H%M%S")
     busy = active_runs()

@@ -51,6 +51,15 @@ export function mountTrain(app) {
   function renderForm() {
     const info = st.info;
     const dev = info.device || {};
+    if (info.can_train === false) {
+      left.replaceChildren(h('h2', {}, '这个版本只能对战'),
+        h('p', {}, info.portable
+          ? '你打开的是免安装版：一个文件、双击就能打牌和局域网联机，但不带训练需要的 PyTorch（显卡版有好几 GB）。'
+          : '没有检测到 PyTorch，训练需要它。'),
+        h('p', {}, '想自己训练模型，请用完整安装版：在 GitHub Release 页面下载 install_windows.bat 等 4 个文件放在一起，双击 install_windows.bat，它会自动安装 Python 和显卡版 PyTorch。'),
+        h('p', { class: 'dim', style: { fontSize: '12.5px' } }, `已有的训练记录在 ${info.home}，右侧仍可查看。`));
+      return;
+    }
     const presets = h('div', { class: 'presets' });
     for (const p of info.presets) {
       presets.appendChild(h('div', { class: 'preset' + (form.preset === p.name ? ' on' : ''), role: 'button', tabindex: 0, onclick: () => { form.preset = p.name; renderForm(); } },
@@ -143,7 +152,7 @@ export function mountTrain(app) {
   // ------------------------------------------------------------ runs
   function renderRuns() {
     if (!st.runs.length) {
-      right.replaceChildren(h('h2', {}, '训练记录'), h('div', { class: 'chart-empty' }, '还没有训练。左侧选择模型大小后点“开始训练”，这里会实时显示胜率变化。'));
+      right.replaceChildren(h('h2', {}, '训练记录'), h('div', { class: 'chart-empty' }, st.info && st.info.can_train === false ? '还没有训练记录。' : '还没有训练。左侧选择模型大小后点“开始训练”，这里会实时显示胜率变化。'));
       return;
     }
     const tabs = h('div', { class: 'runs-bar' });

@@ -29,7 +29,16 @@
 
 ## 安装
 
-### Windows（推荐，一键安装）
+### Windows 免安装版（只打牌，最简单）
+
+从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `guandan_windows.exe`（约 40 MB），双击就能打牌和局域网联机，不用安装 Python 或任何依赖。
+
+- 它不带 PyTorch，用 numpy 运行随包模型（出牌与完整版完全一致），所以**不能训练**；想训练请用下面的完整安装版。
+- 数据（加入的模型、模型名称）放在 exe 旁边的 `guandan_data` 文件夹。把 exe 放进完整安装版的文件夹（例如 `D:\guandan`），就能用那里训练出来的模型对战。
+- 第一次运行时 Windows 可能提示“Windows 已保护你的电脑”，点“更多信息 → 仍要运行”；防火墙询问时勾选“专用网络”，手机才能连进来。
+- 关闭黑色窗口即退出。每次启动要先解压几秒。
+
+### Windows 完整安装版（可以训练）
 
 1. 从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `install_windows.bat`、`install_windows.ps1`、`start_windows.bat`、`train_windows.bat`，放进同一个文件夹（例如 `D:\guandan`）。
 2. 双击 `install_windows.bat`。它会自动：
@@ -104,7 +113,7 @@ guandan eval model.pt --opponent rule --rounds 2000
 guandan info                        显示 GPU、模型大小预设和已有模型
 ```
 
-数据（训练记录、模型库）默认保存在 `~/guandan_data`，Windows 一键安装版保存在安装文件夹的 `guandan_data`，可用环境变量 `GUANDAN_HOME` 修改。
+数据（训练记录、模型库）默认保存在 `~/guandan_data`，Windows 一键安装版保存在安装文件夹的 `guandan_data`，免安装版保存在 exe 旁边的 `guandan_data`，可用环境变量 `GUANDAN_HOME` 修改。
 
 ## 项目结构
 

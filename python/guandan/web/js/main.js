@@ -51,7 +51,7 @@ async function viewHome() {
     }
     const dev = info.device || {};
     foot.append(...[
-      h('span', {}, dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch')),
+      h('span', {}, info.portable ? '免安装版（只能对战）' : dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch（只能对战）')),
       h('span', {}, info.default_model ? `模型：${info.default_model.split(/[\\/]/).slice(-2).join('/')}` : '还没有可用模型'),
       info.lan_urls && info.lan_urls[0] ? h('span', {}, `局域网地址：${info.lan_urls[0]}`) : null,
       h('span', {}, `v${info.version}`),
@@ -66,7 +66,9 @@ async function viewSetup() {
   const cfg = { think: 'fast', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主', hostPlays: true };
   let models = [];
   let room = null;
-  try { [models, room] = await Promise.all([api.get('/api/models'), api.get('/api/room')]); } catch (e) { toast(e.message, 'err'); }
+  let info = {};
+  try { [models, room, info] = await Promise.all([api.get('/api/models'), api.get('/api/room'), api.get('/api/info')]); } catch (e) { toast(e.message, 'err'); }
+  const canSearch = !!(info.device && info.device.torch);  // look-ahead search needs PyTorch
   if (models.length) cfg.model = models[0].id;
 
   const root = h('div', { class: 'page' });
@@ -127,7 +129,7 @@ async function viewSetup() {
             ),
             cfg.scoring !== 'none' ? h('p', { class: 'dim', style: { fontSize: '12.5px', margin: '10px 0 0' } },
               '倍数只影响每局结算的积分，AI 的打法不变，仍以赢下本局、多升级为目标。') : null) : null,
-          h('div', { class: 'panel' }, h('h2', {}, 'AI 思考方式'),
+          !canSearch ? null : h('div', { class: 'panel' }, h('h2', {}, 'AI 思考方式'),
             h('div', { class: 'choice-row' },
               choice(cfg.think === 'fast', '神经网络', '推荐。直接用训练好的网络出牌，不用等待。对随包模型这是最强的方式。', () => { cfg.think = 'fast'; render(); }),
               choice(cfg.think === 'deep', '推演搜索（实验）', '网络先挑出最好的几手，再在随机推测的对手手牌里各模拟打下去比较。对训练不久的模型有帮助；对随包模型反而略弱，每步也要多想半秒左右。', () => { cfg.think = 'deep'; render(); }),

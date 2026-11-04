@@ -58,6 +58,45 @@ jobs:
           name: wheel-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
 
+  portable:
+    # one .exe that plays without installing anything (no PyTorch: numpy inference, no training)
+    name: portable windows exe
+    needs: [wheels]
+    if: always()
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel-windows-latest-x64
+          path: wheel
+      - name: Build one-file exe
+        shell: bash
+        run: |
+          python -m pip install numpy fastapi uvicorn websockets httptools qrcode pyinstaller
+          python -m pip install --no-deps wheel/*.whl
+          pyinstaller --noconfirm --onefile --console --name guandan_windows \
+            --collect-all guandan --collect-submodules uvicorn --collect-submodules websockets \
+            --hidden-import qrcode.image.svg --exclude-module torch --exclude-module tkinter \
+            --distpath dist packaging/portable.py
+          ls -la dist
+      - name: Smoke test
+        shell: bash
+        run: |
+          cd dist
+          ./guandan_windows.exe --selftest
+          (./guandan_windows.exe --no-browser > server.log 2>&1 &)
+          cd ..
+          python packaging/ci_smoke.py 8000 || (cat dist/server.log; exit 1)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable-windows
+          path: dist/guandan_windows.exe
+
   sdist:
     runs-on: ubuntu-latest
     steps:
@@ -72,7 +111,7 @@ jobs:
           path: dist/*.tar.gz
 
   release:
-    needs: [rust-tests, wheels, sdist]
+    needs: [rust-tests, wheels, sdist, portable]
     # publish even if an optional platform (e.g. a queued macOS runner) did not finish
     if: always() && needs.rust-tests.result == 'success' && needs.sdist.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/release')
     runs-on: ubuntu-latest
