@@ -16,7 +16,7 @@ Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.w
 
 ### v1.7.0
 
-- **新增免安装版 `guandan_windows.exe`**：一个约 40 MB 的文件，双击就能打牌和局域网联机，不用装 Python、PyTorch 等依赖。它用 numpy 运行神经网络（和 PyTorch 的结果误差在百万分之一以内，出牌完全一样），所以不能训练、也没有实验性的“推演搜索”；训练仍用一键安装版。把 exe 放进安装文件夹（如 `D:\guandan`），可以直接用那里的模型。
+- **新增免安装版 `guandan_windows.exe`**：一个约 32 MB 的文件，双击就能打牌和局域网联机，不用装 Python、PyTorch 等依赖。它用 numpy 运行神经网络（和 PyTorch 的结果误差在百万分之一以内，出牌完全一样），所以不能训练、也没有实验性的“推演搜索”；训练仍用一键安装版。把 exe 放进安装文件夹（如 `D:\guandan`），可以直接用那里的模型。
 - 没装 PyTorch 时（免安装版或只装了程序），训练中心会说明只能对战，不再报错。
 
 ### v1.6.9

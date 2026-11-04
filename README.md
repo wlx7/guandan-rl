@@ -31,7 +31,7 @@
 
 ### Windows 免安装版（只打牌，最简单）
 
-从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `guandan_windows.exe`（约 40 MB），双击就能打牌和局域网联机，不用安装 Python 或任何依赖。
+从 [Releases](https://github.com/wlx7/guandan-rl/releases) 下载 `guandan_windows.exe`（约 32 MB），双击就能打牌和局域网联机，不用安装 Python 或任何依赖。
 
 - 它不带 PyTorch，用 numpy 运行随包模型（出牌与完整版完全一致），所以**不能训练**；想训练请用下面的完整安装版。
 - 数据（加入的模型、模型名称）放在 exe 旁边的 `guandan_data` 文件夹。把 exe 放进完整安装版的文件夹（例如 `D:\guandan`），就能用那里训练出来的模型对战。
