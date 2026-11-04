@@ -28,8 +28,23 @@ export function mountTable(app) {
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
   const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
+  // full screen hides the phone browser's address bar (more room for the table)
+  const canFull = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  const fullBtn = canFull ? h('button', { class: 'btn small icon', title: '全屏', 'aria-label': '全屏', onclick: toggleFull }, '⛶') : null;
+  function toggleFull() {
+    const d = document;
+    if (d.fullscreenElement || d.webkitFullscreenElement) {
+      (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+      return;
+    }
+    const el = d.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    Promise.resolve(req.call(el, { navigationUI: 'hide' })).then(() => {
+      try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}); } catch {}
+    }).catch(() => {});
+  }
   const counterEl = h('div', { class: 'counter', title: '记牌器：其他三家手里还剩的牌（不含已出的牌和你的手牌）' });
-  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, helpBtn, soundBtn, counterEl);
+  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, fullBtn, helpBtn, soundBtn, counterEl);
   const board = h('div', { class: 'board' });
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
   const zoneEls = DIR.map((d) => h('div', { class: `zone ${d}` }));
@@ -166,6 +181,7 @@ export function mountTable(app) {
     const s = S.s;
     const on = S.counter && s && s.status === 'playing' && you() >= 0 && s.played;
     counterEl.classList.toggle('on', !!on);
+    topbar.classList.toggle('counter-on', !!on);
     if (!on) { counterEl.replaceChildren(); return; }
     const cells = cardCounter(myHand(), s.played, s.level).map((c) => h('div', {
       class: 'cc' + (c.level ? ' lv' : '') + (c.r >= 13 ? ' jk' : '') + (c.r === 14 ? ' big' : '') + (c.left === 0 ? ' zero' : ''),
@@ -411,7 +427,7 @@ export function mountTable(app) {
     let cw = Math.max(short ? 40 : 42, Math.min(cap, W / (1 + Math.max(0, per - 1) * 0.78)));
     let ch = cw * 1.4;
     let sy = ch * 0.34;
-    const maxH = vh * 0.5;
+    const maxH = vh * (vh < 420 ? 0.46 : 0.5);
     // the second row may cover the lower part (big suit pip) of the first row's bottom cards
     let over = 0;
     const total = (c, y) => stacks.reduce((a, m) => a + c + (m - 1) * y, 0) - (rows - 1) * over * c;
