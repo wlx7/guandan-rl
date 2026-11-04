@@ -270,12 +270,17 @@ export function mountTable(app) {
       const st = s.seats[p];
       const place = s.finished.indexOf(p);
       const isTurn = s.current === p && (s.phase === 0 || s.phase === 1);
-      el.className = `seat ${DIR[r]} ${p % 2 === ourTeam() ? 'team-ours' : 'team-theirs'}${isTurn ? ' turn' : ''}`;
+      el.className = `seat ${DIR[r]} ${p % 2 === ourTeam() ? 'team-ours' : 'team-theirs'}${isTurn ? ' turn' : ''}${st.kind === 'ai' ? ' is-ai' : ''}`;
       el.dataset.p = p;
       const avText = st.kind === 'ai' ? (st.name || 'AI').slice(-1) : (st.name || '?').slice(0, 1);
       const av = h('div', { class: 'avatar' + (st.kind === 'ai' ? ' ai' : '') }, avText);
       if (isTurn && s.deadline) av.appendChild(ringSvg());
-      if (place >= 0) av.appendChild(h('span', { class: 'badge' + (place === 0 ? ' p1' : '') }, PLACE[place]));
+      // the finishing badge stamps in once; later renders keep it still
+      const bkey = `${s.match_no}-${s.round_no}-${p}`;
+      S.badges = S.badges || new Set();
+      const justDone = place >= 0 && !S.badges.has(bkey);
+      if (place >= 0) S.badges.add(bkey);
+      if (place >= 0) av.appendChild(h('span', { class: 'badge' + (place === 0 ? ' p1' : '') + (justDone ? ' new' : '') }, PLACE[place]));
       const cnt = s.counts[p];
       const info = h('div', { class: 'info' },
         h('div', { class: 'nm', title: st.name }, st.name + (r === 0 && you() >= 0 && st.name !== '我' ? '（你）' : '')),
@@ -540,6 +545,9 @@ export function mountTable(app) {
     if (!c) return;
     e.preventDefault();
     const on = !S.sel.has(c.dataset.id);
+    const now = Date.now();
+    S.tap2 = S.tap1 && S.tap1.id === c.dataset.id && now - S.tap1.t < 450;  // second tap on the same card
+    S.tap1 = { id: c.dataset.id, t: now };
     drag = { on, touched: new Set([c.dataset.id]) };
     setSel(c, on);
     sound.select();
@@ -559,7 +567,9 @@ export function mountTable(app) {
   hand.addEventListener('pointercancel', endDrag);
   hand.addEventListener('dblclick', (e) => {
     const c = cardFromPoint(e.clientX, e.clientY);
-    if (!c) return;
+    // two quick taps on two different cards of one column are two selections, not a double tap
+    if (!c || !S.tap2 || (S.tap1 && S.tap1.id !== c.dataset.id)) return;
+    S.tap2 = false;
     const col = c.dataset.col;
     const all = [...hand.querySelectorAll(`.card[data-col="${col}"]`)];
     const on = !all.every((x) => S.sel.has(x.dataset.id));
