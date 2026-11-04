@@ -1,4 +1,4 @@
-import { api, toast, h, modal } from './util.js';
+import { api, toast, h, modal, fillModelSelect, modelLabel } from './util.js';
 import { LineChart, SERIES_COLORS, fmtFrames } from './chart.js';
 
 const OPP = [
@@ -15,7 +15,7 @@ function fmtDur(s) {
 }
 
 export function mountTrain(app) {
-  const st = { info: null, models: [], runs: [], sel: null, rows: [], since: 0, timer: 0, charts: {}, closed: false, logOpen: false, stopping: {} };
+  const st = { info: null, models: [], runs: [], sel: null, rows: [], since: 0, timer: 0, charts: {}, closed: false, logOpen: false, stopping: {}, showHidden: false };
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const form = {
@@ -40,7 +40,7 @@ export function mountTrain(app) {
     else { form.actor_device = 'cpu'; form.actors = Math.max(1, Math.min(16, cpu - (cpu >= 12 ? 4 : 2))); form.envs = 64; }
     form.batch = st.info.device.cuda ? 4096 : 512;
     const running = st.runs.find((r) => r.status === 'running');
-    st.sel = running ? running.name : (st.runs[0] && st.runs[0].name) || null;
+    st.sel = running ? running.name : ((st.runs.find((r) => !r.hidden) || st.runs[0] || {}).name || null);
     renderForm();
     renderRuns();
     if (st.sel) loadRun(st.sel, true);
@@ -61,7 +61,7 @@ export function mountTrain(app) {
     }
     const num = (k, attrs = {}) => h('input', { type: 'number', value: form[k], ...attrs, oninput: (e) => { form[k] = e.target.value === '' ? '' : +e.target.value; } });
     const baseSel = h('select', { onchange: (e) => { form.base = e.target.value; } }, h('option', { value: '' }, '从零开始（随机初始化）'));
-    for (const m of st.models) baseSel.appendChild(h('option', { value: m.id, selected: form.base === m.id }, `${m.source}：${m.id.split('/').slice(-1)[0]}`));
+    fillModelSelect(baseSel, st.models, form.base);
     const devSel = h('select', { onchange: (e) => { form.device = e.target.value; } },
       ...[['auto', '自动'], ['cuda', 'GPU (CUDA)'], ['cpu', 'CPU']].map(([v, t]) => h('option', { value: v, selected: form.device === v }, t)));
     const actDevSel = h('select', { onchange: (e) => { form.actor_device = e.target.value; clampForm(); renderForm(); } },
@@ -73,7 +73,8 @@ export function mountTrain(app) {
           h('span', { class: 'hint' }, '用已有名称会从上次的进度继续训练')),
         h('div', { class: 'field' }, h('span', { class: 'label' }, '模型大小'), presets,
           h('span', { class: 'hint' }, '从基准模型继续训练时，沿用基准模型的大小')),
-        h('div', { class: 'field' }, h('label', {}, '基准模型'), baseSel, h('span', { class: 'hint' }, '在已有模型上继续自对弈，评估时会和它对比胜率')),
+        h('div', { class: 'field' }, h('label', {}, '基准模型'), baseSel, h('span', { class: 'hint' }, '在已有模型上继续自对弈，评估时会和它对比胜率。',
+          h('a', { href: '#', onclick: (e) => { e.preventDefault(); manageModels(); } }, '整理模型列表'))),
         h('div', { class: 'grid2' },
           h('div', { class: 'field' }, h('label', {}, '学习设备'), devSel),
           h('div', { class: 'field' }, h('label', {}, '自对弈设备'), actDevSel)),
@@ -146,16 +147,23 @@ export function mountTrain(app) {
       return;
     }
     const tabs = h('div', { class: 'runs-bar' });
-    for (const r of st.runs) {
-      tabs.appendChild(h('button', { class: 'run-tab' + (r.name === st.sel ? ' on' : ''), onclick: () => { st.sel = r.name; st.rows = []; st.since = 0; renderRuns(); loadRun(r.name, true); } },
-        h('span', { class: 'dot' + (r.status === 'running' ? ' on' : '') }), r.name));
+    const shown = st.runs.filter((r) => st.showHidden || !r.hidden || r.status === 'running' || r.name === st.sel);
+    const nHidden = st.runs.filter((r) => r.hidden && r.status !== 'running').length;
+    for (const r of (shown.length ? shown : st.runs)) {
+      tabs.appendChild(h('button', { class: 'run-tab' + (r.name === st.sel ? ' on' : '') + (r.hidden ? ' hidden-run' : ''), title: r.name, onclick: () => { st.sel = r.name; st.rows = []; st.since = 0; renderRuns(); loadRun(r.name, true); } },
+        h('span', { class: 'dot' + (r.status === 'running' ? ' on' : '') }), r.label || r.name));
     }
-    const run = st.runs.find((r) => r.name === st.sel) || st.runs[0];
+    if (nHidden) tabs.appendChild(h('button', { class: 'btn small ghost', onclick: () => { st.showHidden = !st.showHidden; renderRuns(); } },
+      st.showHidden ? '收起已隐藏的训练' : `显示已隐藏的训练（${nHidden}）`));
+    const run = st.runs.find((r) => r.name === st.sel) || shown[0] || st.runs[0];
     st.sel = run.name;
     const running = run.status === 'running';
     const head = h('div', { style: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' } },
-      h('h2', { style: { margin: 0 } }, run.name),
+      h('h2', { style: { margin: 0 } }, run.label || run.name),
+      run.label ? h('span', { class: 'dim', style: { fontSize: '13px' } }, run.name) : null,
       h('span', { class: 'tag ' + (running ? 'on' : 'off') }, running ? '训练中' : '已停止'),
+      h('button', { class: 'btn small ghost', title: '改一个好记的显示名称（文件夹名不变）', onclick: () => renameEntry(`runs/${run.name}`, run.label || '', run.name) }, '改名'),
+      h('button', { class: 'btn small ghost', title: '隐藏后不再出现在模型列表里，文件不会删除，随时可以恢复', onclick: () => hideEntry(`runs/${run.name}`, !run.hidden) }, run.hidden ? '取消隐藏' : '隐藏'),
       h('span', { class: 'dim', style: { fontSize: '13px' } }, `${run.preset || ''} ${run.params ? (run.params / 1e6).toFixed(2) + 'M 参数' : ''} ${run.device ? '· ' + run.device : ''}`),
       h('span', { class: 'spacer', style: { flex: 1 } }),
       running ? stopButtons(run)
@@ -227,6 +235,66 @@ export function mountTrain(app) {
       setTimeout(refreshRuns, 1500);
     } catch (e) { toast(e.message, 'err'); }
   }
+  async function refreshLists() {
+    try { [st.models, st.runs] = await Promise.all([api.get('/api/models'), api.get('/api/train/runs')]); } catch (e) { toast(e.message, 'err'); }
+    renderForm();
+    renderRuns();
+  }
+  async function hideEntry(key, hidden) {
+    try { await api.post('/api/models/manage', { key, hidden }); toast(hidden ? '已隐藏（文件仍保留，可在“整理模型列表”里恢复）' : '已恢复显示'); } catch (e) { toast(e.message, 'err'); }
+    refreshLists();
+  }
+  function renameEntry(key, current, fallback) {
+    const input = h('input', { type: 'text', value: current, placeholder: fallback, maxlength: 60 });
+    let m;
+    const save = async () => {
+      try { await api.post('/api/models/manage', { key, label: input.value }); m.close(); toast('已改名'); refreshLists(); } catch (e) { toast(e.message, 'err'); }
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    const box = h('div', {}, h('h2', {}, '改名'), h('div', { class: 'sub' }, '只改显示名称，文件和文件夹不变。留空恢复默认名称。'), input,
+      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => m.close() }, '取消'), h('button', { class: 'btn primary', onclick: save }, '保存')));
+    m = modal(box, { onClose: () => {} });
+    setTimeout(() => input.focus(), 0);
+  }
+  async function manageModels() {
+    let all;
+    try { all = await api.get('/api/models?all=true'); } catch (e) { toast(e.message, 'err'); return; }
+    // one row per model library file and per training run (its latest model); snapshots stay out of the way
+    const rows = all.filter((m) => m.group !== '训练' || m.id.endsWith('/model.pt'));
+    const keyOf = (m) => (m.group === '训练' ? m.id.replace(/\/model\.pt$/, '') : m.id);
+    const list = h('div', { class: 'result-list', style: { maxHeight: '60vh', overflow: 'auto' } });
+    const state = new Map(rows.map((m) => [keyOf(m), { label: m.label, hidden: !!m.hidden, orig: m }]));
+    for (const m of rows) {
+      const k = keyOf(m);
+      const v = state.get(k);
+      const input = h('input', { type: 'text', value: m.label, maxlength: 60, oninput: (e) => { v.label = e.target.value; } });
+      const chk = h('input', { type: 'checkbox', checked: !m.hidden, disabled: m.group === '内置', onchange: (e) => { v.hidden = !e.target.checked; } });
+      list.appendChild(h('div', { class: 'result-row', style: { gridTemplateColumns: '4.5em 1fr auto' } },
+        h('span', { class: 'rd' }, m.group),
+        input,
+        h('label', { class: 'dim', style: { fontSize: '12.5px', display: 'inline-flex', gap: '4px', alignItems: 'center' }, title: m.id }, chk, '显示')));
+    }
+    let md;
+    const save = async () => {
+      try {
+        for (const [key, v] of state) {
+          const body = { key };
+          if (v.label !== v.orig.label) body.label = v.label;
+          if (v.hidden !== !!v.orig.hidden) body.hidden = v.hidden;
+          if (Object.keys(body).length > 1) await api.post('/api/models/manage', body);
+        }
+        md.close(); toast('模型列表已更新'); refreshLists();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    const box = h('div', {}, h('h2', {}, '整理模型列表'),
+      h('div', { class: 'sub' }, '改名只改显示名称；取消“显示”后不再出现在选择列表里，文件不会删除。每个训练只列出最新模型，各阶段快照可在训练中心“加入模型库”。'),
+      list,
+      h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => md.close() }, '取消'), h('button', { class: 'btn primary', onclick: save }, '保存')));
+    md = modal(box, { onClose: () => {} });
+    const mbox = md.el.querySelector('.modal');
+    if (mbox) mbox.style.width = 'min(640px, 100%)';
+  }
+
   function exportModel(run, file) {
     const input = h('input', { type: 'text', value: `${run}-${file.replace('.pt', '')}` });
     const box = h('div', {}, h('h2', {}, '加入模型库'), h('div', { class: 'sub' }, '起个名字，之后开桌时可以选择它'), input);

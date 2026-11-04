@@ -80,6 +80,8 @@ a { color: var(--brass-hi); }
 .btn.danger { border-color: rgba(226, 90, 76, 0.6); color: #ffd9d3; }
 .btn.danger:hover { background: rgba(194, 55, 43, 0.25); }
 .btn.small { padding: 0.35em 0.85em; font-size: 13px; }
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--text-2); }
+.btn.ghost:hover { color: var(--text); }
 .btn.icon { padding: 0.4em 0.7em; }
 
 .field { display: grid; gap: 6px; align-content: start; }
@@ -374,6 +376,8 @@ body:not(.in-game) .toast-layer { left: 50%; transform: translateX(-50%); justif
 .runs-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .run-tab { border: 1px solid var(--line); background: rgba(0, 0, 0, 0.18); border-radius: 10px; padding: 6px 12px; cursor: pointer; display: flex; gap: 8px; align-items: center; font-size: 14px; }
 .run-tab.on { border-color: var(--brass); }
+.run-tab.hidden-run { opacity: 0.6; }
+.modal .result-row input[type=text] { width: 100%; min-width: 0; }
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .stat { padding: 10px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--line); }
 .stat .k { font-size: 12px; color: var(--text-2); }

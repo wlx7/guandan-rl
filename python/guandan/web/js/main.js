@@ -3,7 +3,7 @@ import { sound } from './sound.js';
 import { mountTable } from './table.js';
 import { mountTrain } from './train.js';
 
-import { api, toast, h, seatStore, nameStore, modal } from './util.js';
+import { api, toast, h, seatStore, nameStore, modal, fillModelSelect } from './util.js';
 
 const SEAT_POS = ['下（你）', '右（下家）', '上（对家）', '左（上家）'];
 const app = document.getElementById('app');
@@ -75,11 +75,7 @@ async function viewSetup() {
   function modelSelect(value, onchange, small) {
     const sel = h('select', { onchange: (e) => onchange(e.target.value), 'aria-label': '选择模型' });
     if (small) sel.appendChild(h('option', { value: '' }, '同默认模型'));
-    for (const m of models) {
-      const o = h('option', { value: m.id }, `${m.source}：${m.id.split('/').slice(-1)[0]}`);
-      if (m.id === value) o.selected = true;
-      sel.appendChild(o);
-    }
+    fillModelSelect(sel, models, value);
     return sel;
   }
 

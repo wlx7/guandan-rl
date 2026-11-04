@@ -62,6 +62,8 @@ def active_runs():
 
 
 def list_runs():
+    from ..paths import load_model_list
+    names = load_model_list()
     out = []
     for d in sorted(glob.glob(os.path.join(runs_dir(), "*")), key=os.path.getmtime, reverse=True):
         if not os.path.isdir(d):
@@ -78,6 +80,8 @@ def list_runs():
         evals = [r for r in rows if r.get("type") == "eval"]
         out.append({
             "name": name,
+            "label": names["labels"].get(f"runs/{name}", ""),
+            "hidden": f"runs/{name}" in names["hidden"],
             "status": run_status(name),
             "preset": cfg.get("model", {}).get("preset") or cfg.get("preset"),
             "params": cfg.get("params"),

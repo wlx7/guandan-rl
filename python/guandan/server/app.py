@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
-from ..paths import list_models, resolve_model, default_model, home
+from ..paths import list_models, resolve_model, default_model, home, set_model_entry
 from . import trainer
 from ..proc import resource_limits
 from ..scoring import PRESETS as scoring_presets
@@ -114,11 +114,23 @@ def api_qr(text: str):
 
 
 @app.get("/api/models")
-def api_models():
+def api_models(all: bool = False):
     out = []
-    for m in list_models():
-        out.append({k: m[k] for k in ("id", "source", "mtime", "size")})
+    for m in list_models(all=all):
+        out.append({k: m[k] for k in ("id", "source", "group", "label", "hidden", "mtime", "size")})
     return out
+
+
+@app.post("/api/models/manage")
+def api_models_manage(body: dict):
+    """Rename and/or hide a model-list entry: {"key": "runs/<name>" | "models/<file>", "label"?, "hidden"?}."""
+    key = str(body.get("key") or "")
+    if not (key.startswith("runs/") or key.startswith("models/") or key.startswith("builtin/")) or ".." in key:
+        raise HTTPException(400, "无效的模型")
+    if key.startswith("builtin/") and body.get("hidden"):
+        raise HTTPException(400, "内置模型不能隐藏")
+    set_model_entry(key, body.get("label"), body.get("hidden"))
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ training

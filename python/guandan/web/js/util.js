@@ -60,3 +60,22 @@ export function modal(content, { onClose } = {}) {
   return { close, el: back };
 }
 
+
+// Model <select> grouped as 内置 / 模型库 / 训练, showing display names.
+export function modelLabel(m) {
+  return m.label || `${m.source}：${m.id.split('/').slice(-1)[0]}`;
+}
+export function fillModelSelect(sel, models, value) {
+  const groups = new Map();
+  for (const m of models) {
+    const g = m.group || m.source || '';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(m);
+  }
+  for (const [g, list] of groups) {
+    const og = h('optgroup', { label: g });
+    for (const m of list) og.appendChild(h('option', { value: m.id, selected: m.id === value }, modelLabel(m)));
+    sel.appendChild(og);
+  }
+  return sel;
+}
