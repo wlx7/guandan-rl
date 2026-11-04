@@ -95,7 +95,7 @@ jobs:
           cp scripts/install_windows.ps1 assets/ 2>/dev/null || true
           cp python/guandan/models/*.pt assets/ 2>/dev/null || true
           cp scripts/install_windows.bat scripts/start_windows.bat scripts/train_windows.bat assets/ 2>/dev/null || true
-          cp scripts/install.sh assets/ 2>/dev/null || true
+          cp scripts/install.sh scripts/cloud_train.sh assets/ 2>/dev/null || true
           ls -la assets
       - uses: softprops/action-gh-release@v2
         with:

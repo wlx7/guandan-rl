@@ -224,6 +224,22 @@ v1.6 又试了两处改进（v1.5.1 随包模型，和只用网络的自己直�
 - 训练可以随时停止。用**同一个名称**再次开始就会从上次的进度继续（包括优化器状态）。
 - 一般几百万样本后就能稳定战胜规则 AI；样本越多越强（随包模型训练了约 17.7 亿样本、约 15 小时，仍在进步），建议至少训练几个小时。
 
+## 在云主机上训练
+
+笔记本跑不动时，可以按小时租一台 Linux GPU 云主机（AutoDL、恒源云等）。这个模型很小，瓶颈主要在 CPU 上的牌局模拟，所以选 **RTX 4090 这类单卡、每卡 CPU 核数尽量多（12 核以上）** 的机器即可，不需要 A100。镜像选带 PyTorch 2.x、CUDA 12 的 Ubuntu 镜像。
+
+在云主机的终端里运行（AutoDL 先 `source /etc/network_turbo` 加速 GitHub）：
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/wlx7/guandan-rl/main/scripts/cloud_train.sh
+bash cloud_train.sh bench        # 约 10 分钟：测几种并行设置的速度，和 RTX 3060 笔记本（约 3.4 万样本/秒）对比
+bash cloud_train.sh train 10     # 后台训练 10 小时（从内置模型继续），关掉网页也不会停
+bash cloud_train.sh status       # 查看进度和评估结果
+bash cloud_train.sh pack         # 把模型复制到 export/，在网页文件浏览器里下载
+```
+
+下载的模型放进本机 `guandan_data/models/`，开桌时就能在“模型库”里选它。想从别的模型继续，运行前设置 `BASE=/路径/model.pt`。
+
 ## 命令行训练
 
 ```bash
