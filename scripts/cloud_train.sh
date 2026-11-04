@@ -110,16 +110,42 @@ case "$MODE" in
     echo "已在后台运行，关掉网页也不会停。查看进度：bash cloud_train.sh status"
     ;;
   status)
-    NAME=${NAME:-cloud}
-    grep -E "^\[eval\]" "$ROOT/$NAME.log" | tail -5 || true
-    tail -2 "$ROOT/$NAME.log"
+    if [ -f "$ROOT/bench/hill/summary.txt" ] && [ -z "$NAME" ]; then
+      # automatic tuning (bench/hill_loop.sh) is in charge: show its progress
+      echo "== 自动调参记录 =="
+      tail -8 "$ROOT/bench/hill/summary.txt"
+      cur=$(pgrep -af "guandan.train --name" | sed -E 's/.*--name ([^ ]+).*/\1/' | head -1)
+      if [ -n "$cur" ]; then
+        echo "== 正在训练：$cur =="
+        grep -E "^\[eval\]" "$ROOT/bench/hill/$cur.log" | tail -2 || true
+        tail -1 "$ROOT/bench/hill/$cur.log"
+      else
+        echo "（此刻没有训练在跑：可能在两轮之间做对比评估）"
+      fi
+      pgrep -f hill_loop.sh >/dev/null && echo "自动调参程序：运行中" || echo "自动调参程序：未运行"
+    else
+      NAME=${NAME:-cloud}
+      grep -E "^\[eval\]" "$ROOT/$NAME.log" | tail -5 || true
+      tail -2 "$ROOT/$NAME.log"
+    fi
     ;;
   stop)
-    NAME=${NAME:-cloud}
-    touch "$GUANDAN_HOME/runs/$NAME/STOP"
-    echo "已请求停止，约半分钟内保存模型后退出。"
+    if pgrep -f hill_loop.sh >/dev/null; then
+      touch "$ROOT/bench/hill/STOP"
+      cur=$(pgrep -af "guandan.train --name" | sed -E 's/.*--name ([^ ]+).*/\1/' | head -1)
+      [ -n "$cur" ] && touch "$GUANDAN_HOME/runs/$cur/STOP"
+      echo "已请求停止自动调参：当前训练约半分钟内保存后退出（以后从断点继续：删除 bench/hill/STOP 再运行 bench/hill_loop.sh）。"
+    else
+      NAME=${NAME:-cloud}
+      touch "$GUANDAN_HOME/runs/$NAME/STOP"
+      echo "已请求停止，约半分钟内保存模型后退出。"
+    fi
     ;;
   pack)
+    if [ -z "$NAME" ] && [ -f "$ROOT/bench/hill/state.json" ]; then
+      NAME=$("$PY" -c "import json; print(json.load(open('$ROOT/bench/hill/state.json'))['best']['model'].split('/')[0])")
+      echo "自动调参目前最强的模型：$NAME"
+    fi
     NAME=${NAME:-cloud}
     mkdir -p "$ROOT/export"
     out="$ROOT/export/$NAME-$(date +%m%d-%H%M).pt"
