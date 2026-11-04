@@ -7,6 +7,22 @@ export const strength = (r, level) => (r >= 13 ? r + 1 : r === level ? 13 : r);
 export const rankName = (r) => (r === 13 ? '小王' : r === 14 ? '大王' : RANKS[r]);
 export const levelName = (lv) => RANKS[lv];
 
+// Suit shapes drawn as SVG: phones otherwise render ♠♥♣♦ with an emoji font of a different size,
+// which overflows the visible strip of stacked cards.
+const SUIT_PATHS = [
+  // spade
+  'M50 4C80 30 96 44 96 60C96 74 85 82 73 82C64 82 57 77 53 70C54 80 58 88 66 96H34C42 88 46 80 47 70C43 77 36 82 27 82C15 82 4 74 4 60C4 44 20 30 50 4Z',
+  // heart
+  'M50 92C20 68 4 50 4 31C4 15 16 5 29 5C39 5 46 11 50 19C54 11 61 5 71 5C84 5 96 15 96 31C96 50 80 68 50 92Z',
+  // club
+  'M50 6A21 21 0 0 1 69 37A21 21 0 1 1 57 72C58 82 62 89 68 96H32C38 89 42 82 43 72A21 21 0 1 1 31 37A21 21 0 0 1 50 6Z',
+  // diamond
+  'M50 2L90 50L50 98L10 50Z',
+];
+export function suitSvg(s, cls = '') {
+  return `<svg class="sv${cls ? ' ' + cls : ''}" viewBox="0 0 100 100" aria-hidden="true"><path d="${SUIT_PATHS[s]}"/></svg>`;
+}
+
 export function cardName(t) {
   const r = rankOf(t);
   if (r >= 13) return rankName(r);
@@ -35,7 +51,7 @@ export function cardEl(t, opts = {}) {
   const isWild = r === level && s === 1;
   if (isWild) el.classList.add('wild');
   const rn = RANKS[r];
-  el.innerHTML = `<div class="idx"><span class="r${rn === '10' ? ' ten' : ''}">${rn}</span><span class="s">${SUITS[s]}</span></div><div class="pip">${SUITS[s]}</div>${isWild ? '<span class="tagw">配</span>' : ''}`;
+  el.innerHTML = `<div class="idx"><span class="r${rn === '10' ? ' ten' : ''}">${rn}</span><span class="s">${suitSvg(s)}</span></div><div class="pip">${suitSvg(s)}</div>${isWild ? '<span class="tagw">配</span>' : ''}`;
   el.title = cardName(t) + (isWild ? '（逢人配）' : '');
   return el;
 }

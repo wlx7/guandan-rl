@@ -1,4 +1,4 @@
-import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, SUITS, rankOf, arrangeHand, cardCounter, straightFlushes } from './cards.js';
+import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, SUITS, rankOf, arrangeHand, cardCounter, straightFlushes, suitSvg } from './cards.js';
 import { sound } from './sound.js';
 import { api, toast, h, seatStore, modal } from './util.js';
 
@@ -371,7 +371,7 @@ export function mountTable(app) {
       const sf = h('span', { class: 'sfpick', title: '选出这个花色的同花顺（再点换下一个）' }, h('span', { class: 'lab' }, '同花顺'));
       for (let su = 0; su < 4; su++) {
         const list = straightFlushes(cards, s.level, su);
-        sf.appendChild(h('button', { class: 'sfb' + (su === 1 || su === 3 ? ' red' : ''), disabled: !list.length, onclick: () => pickSF(su) }, SUITS[su]));
+        sf.appendChild(h('button', { class: 'sfb' + (su === 1 || su === 3 ? ' red' : ''), disabled: !list.length, title: SUITS[su], 'aria-label': SUITS[su], onclick: () => pickSF(su), html: suitSvg(su) }));
       }
       M.push(sf);
       if (S.sel.size) {
@@ -428,7 +428,10 @@ export function mountTable(app) {
     let cw = Math.max(short ? 40 : 42, Math.min(cap, W / (1 + Math.max(0, per - 1) * 0.78)));
     let ch = cw * 1.4;
     let sy = ch * 0.34;
-    const maxH = vh * (vh < 420 ? 0.44 : 0.48);
+    // leave the table enough room to show everyone's plays (two bands of played cards on phones)
+    const boardMin = short ? 112 : 220;
+    const avail = vh - topbar.offsetHeight - (toolsEl.offsetHeight || 34) - 8 - boardMin;
+    const maxH = Math.max(short ? 120 : 160, Math.min(vh * (vh < 420 ? 0.44 : 0.48), avail));
     // the second row may cover the lower part (big suit pip) of the first row's bottom cards
     let over = 0;
     const total = (c, y) => stacks.reduce((a, m) => a + c + (m - 1) * y, 0) - (rows - 1) * over * c;
@@ -493,6 +496,7 @@ export function mountTable(app) {
     hand.style.height = `${height}px`;
     hand.style.setProperty('--cw', `${cw}px`);
     hand.style.setProperty('--ch', `${ch}px`);
+    hand.style.setProperty('--sy', `${sy}px`);
     const used = {};
     const els = [];
     cols.forEach((col, i) => {

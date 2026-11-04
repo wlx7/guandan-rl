@@ -219,7 +219,9 @@ def api_room_create(body: dict):
     STATE["room"] = room
     token = None
     seat = None
-    if room.human_seats():
+    # host_plays = False: this computer only hosts (and shows the table); the human seats are
+    # taken by phones or other devices on the LAN
+    if room.human_seats() and body.get("host_plays", True):
         seat, token = room.join(0 if seats[0]["kind"] == "human" else None, body.get("name") or "房主")
     return {"room": room.id, "seat": seat, "token": token}
 

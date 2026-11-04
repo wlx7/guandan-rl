@@ -63,7 +63,7 @@ async function viewHome() {
 
 // ---------------------------------------------------------------- setup
 async function viewSetup() {
-  const cfg = { think: 'fast', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主' };
+  const cfg = { think: 'fast', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || '房主', hostPlays: true };
   let models = [];
   let room = null;
   try { [models, room] = await Promise.all([api.get('/api/models'), api.get('/api/room')]); } catch (e) { toast(e.message, 'err'); }
@@ -142,7 +142,14 @@ async function viewSetup() {
         h('div', { class: 'panel' }, h('h2', {}, '座位'),
           h('p', { class: 'muted', style: { margin: '0 0 6px', fontSize: '13px' } }, teach ? '教学模式固定为你与三个 AI。' : '对家是你的队友。设为“玩家”的座位，可由同一 WiFi 下的手机或电脑扫码加入。'),
           mini,
-          h('p', { class: 'dim', style: { fontSize: '13px' } }, humans === 0 ? '四个座位都是 AI：你将以观战者身份旁观（可看到所有手牌）。' : humans > 1 ? `需要另外 ${humans - 1} 位玩家通过局域网加入后才会开始。` : ''),
+          humans > 0 ? h('div', { class: 'field', style: { marginTop: '8px' } }, h('label', {}, '这台电脑'),
+            h('div', { class: 'choice-row' },
+              choice(cfg.hostPlays, '入座打牌', teach ? '在这台电脑上打。' : '你在这台电脑上坐南家（第一个“玩家”座位）。', () => { cfg.hostPlays = true; render(); }),
+              choice(!cfg.hostPlays, '只做主机', '这台电脑只运行 AI 和显示牌桌，用手机等其他设备扫码入座（看不到任何人的手牌）。', () => { cfg.hostPlays = false; render(); }),
+            )) : null,
+          h('p', { class: 'dim', style: { fontSize: '13px' } }, humans === 0 ? '四个座位都是 AI：你将以观战者身份旁观（可看到所有手牌）。'
+            : !cfg.hostPlays ? `开桌后用手机扫牌桌上的二维码入座（共 ${humans} 个玩家座位）。`
+            : humans > 1 ? `需要另外 ${humans - 1} 位玩家通过局域网加入后才会开始。` : ''),
           warn,
           h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '10px' } },
             h('button', { class: 'btn primary', disabled: !models.length, onclick: start }, humans === 0 ? '开始观战' : '开桌')),
@@ -155,7 +162,7 @@ async function viewSetup() {
     nameStore.set(cfg.name);
     try {
       const body = {
-        mode: cfg.mode, length: cfg.length, think: cfg.think, scoring: cfg.scoring, model: cfg.model, ai_speed: cfg.ai_speed, name: cfg.name,
+        mode: cfg.mode, length: cfg.length, think: cfg.think, scoring: cfg.scoring, model: cfg.model, ai_speed: cfg.ai_speed, name: cfg.name, host_plays: cfg.hostPlays,
         seats: cfg.seats.map((k, i) => ({ kind: k, model: cfg.seatModels[i] || cfg.model })),
       };
       const r = await api.post('/api/room/create', body);

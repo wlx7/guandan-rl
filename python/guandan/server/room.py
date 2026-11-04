@@ -218,7 +218,7 @@ class Room:
         # cards played this round by each player (public; used by the card counter)
         st["played"] = [list(g.played(p)) for p in range(4)]
         visible = set()
-        if v < 0 or self.mode == "teach":
+        if (v < 0 and not self.human_seats()) or self.mode == "teach":
             visible = {0, 1, 2, 3}
         elif v in finished:
             visible = {(v + 2) % 4}
