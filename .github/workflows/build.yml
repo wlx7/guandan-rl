@@ -97,6 +97,95 @@ jobs:
           name: portable-windows
           path: dist/guandan_windows.exe
 
+  android:
+    # the Android app: Rust table server (android/server) in a WebView shell (android/app)
+    name: android apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Server on Linux (same code) plays a table
+        run: |
+          python -m pip install numpy websockets
+          python packaging/export_gdm.py python/guandan/models/guandan-medium.pt guandan-medium.gdm
+          cd android/server
+          cargo build --release
+          (./target/release/guandan-server --model ../../guandan-medium.gdm --home "$RUNNER_TEMP/h" --port 8000 > "$RUNNER_TEMP/server.log" 2>&1 &)
+          cd ../..
+          python packaging/ci_smoke.py 8000 || (cat "$RUNNER_TEMP/server.log"; exit 1)
+      - name: Build the server library for Android
+        run: |
+          cargo install cargo-ndk --locked
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cd android/server
+          cargo ndk -t arm64-v8a -t x86_64 -P 24 -o ../app/src/main/jniLibs build --release --lib
+          ls -la ../app/src/main/jniLibs/*
+          mkdir -p ../app/src/main/assets
+          cp ../../guandan-medium.gdm ../app/src/main/assets/
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build the APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            export ANDROID_KEYSTORE="$RUNNER_TEMP/release.jks"
+          fi
+          cd android
+          gradle --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk ../guandan_android.apk
+          ls -la ../guandan_android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: guandan_android.apk
+
+  android-test:
+    # install the APK on an emulator, open it and play an AI table through its server
+    name: android emulator test
+    needs: [android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install websockets
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash packaging/android_emulator_test.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-emulator
+          path: emu/
+
   sdist:
     runs-on: ubuntu-latest
     steps:
@@ -111,7 +200,7 @@ jobs:
           path: dist/*.tar.gz
 
   release:
-    needs: [rust-tests, wheels, sdist, portable]
+    needs: [rust-tests, wheels, sdist, portable, android, android-test]
     # publish even if an optional platform (e.g. a queued macOS runner) did not finish
     if: always() && needs.rust-tests.result == 'success' && needs.sdist.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/release')
     runs-on: ubuntu-latest
@@ -130,6 +219,7 @@ jobs:
       - name: Collect release assets
         run: |
           mkdir -p assets
+          rm -f dist/*.png dist/*.txt  # emulator test screenshots and logs
           cp dist/* assets/
           cp scripts/install_windows.ps1 assets/ 2>/dev/null || true
           cp python/guandan/models/*.pt assets/ 2>/dev/null || true

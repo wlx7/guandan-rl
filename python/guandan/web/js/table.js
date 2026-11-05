@@ -36,7 +36,8 @@ export function mountTable(app, roomId, watch) {
   const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
   const pauseBtn = h('button', { class: 'btn small icon', title: '暂停', 'aria-label': '暂停牌局', onclick: () => send({ action: 'pause' }) }, '⏸');
   // full screen hides the phone browser's address bar (more room for the table)
-  const canFull = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
+  // the Android app is fullscreen already (its WebView has no fullscreen API)
+  const canFull = !/GuandanApp/.test(navigator.userAgent) && !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
   const fullBtn = canFull ? h('button', { class: 'btn small icon', title: '全屏', 'aria-label': '全屏', onclick: toggleFull }, '⛶') : null;
   function toggleFull() {
     const d = document;

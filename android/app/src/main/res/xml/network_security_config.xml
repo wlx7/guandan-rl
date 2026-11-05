@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- the app talks to its own server on this phone over plain http -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

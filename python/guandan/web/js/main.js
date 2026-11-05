@@ -3,7 +3,7 @@ import { sound } from './sound.js';
 import { mountTable } from './table.js';
 import { mountTrain } from './train.js';
 
-import { api, toast, h, seatStore, nameStore, modal, fillModelSelect, getMe, adminToken } from './util.js';
+import { api, toast, h, seatStore, nameStore, modal, fillModelSelect, getMe, adminToken, host } from './util.js';
 
 const SEAT_POS = ['下（你）', '右（下家）', '上（对家）', '左（上家）'];
 const app = document.getElementById('app');
@@ -32,7 +32,7 @@ async function viewHome() {
     h('div', { class: 'home-actions' },
       canCreate ? h('a', { class: 'btn primary', href: '#/play' }, '开一桌')
         : h('button', { class: 'btn primary', title: '房主没有开放其他设备开桌', onclick: () => toast('房主没有开放其他设备开桌，请让房主开桌后扫码加入', 'err') }, '开一桌'),
-      me.admin || me.guest_train ? h('a', { class: 'btn', href: '#/train' }, '训练中心') : null,
+      me.train !== false && (me.admin || me.guest_train) ? h('a', { class: 'btn', href: '#/train' }, '训练中心') : null,
     ),
     joinSlot,
     foot,
@@ -55,7 +55,7 @@ async function viewHome() {
     const info = await api.get('/api/info');
     const dev = info.device || {};
     foot.append(...[
-      h('span', {}, info.portable ? '免安装版（只能对战）' : dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch（只能对战）')),
+      h('span', {}, info.app === 'android' ? '安卓版（只能对战）' : info.portable ? '免安装版（只能对战）' : dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch（只能对战）')),
       h('span', {}, info.default_model ? `模型：${info.default_model.split(/[\\/]/).slice(-2).join('/')}` : '还没有可用模型'),
       info.lan_urls && info.lan_urls[0] ? h('span', {}, `局域网地址：${info.lan_urls[0]}`) : null,
       h('span', {}, `v${info.version}`),
@@ -71,7 +71,7 @@ async function viewHome() {
 function permLinks(me) {
   const link = (text, fn) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); fn(); } }, text);
   if (me.admin) {
-    return [h('span', {}, me.local ? '你是房主（运行游戏的电脑）' : '你已用房主密码登录'),
+    return [h('span', {}, me.local ? `你是房主（运行游戏的${host.device}）` : '你已用房主密码登录'),
       link('权限设置', () => permSettings(me)),
       me.local ? null : link('退出房主', async () => { try { await api.post('/api/perm/logout'); } catch {} adminToken.clear(); route(); })].filter(Boolean);
   }
@@ -93,7 +93,7 @@ function permLogin() {
   };
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   const box = h('div', {}, h('h2', {}, '房主登录'),
-    h('div', { class: 'sub' }, '输入在运行游戏的电脑上设置的房主密码，这台设备就能管理所有牌桌和训练中心。'),
+    h('div', { class: 'sub' }, `输入在运行游戏的${host.device}上设置的房主密码，这台设备就能管理所有牌桌${host.device === '电脑' ? '和训练中心' : ''}。`),
     h('div', { class: 'field', style: { margin: '12px auto 0', maxWidth: '240px' } }, input),
     h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => m.close() }, '取消'), h('button', { class: 'btn primary', onclick: go }, '登录')));
   m = modal(box, { onClose: () => {} });
@@ -109,7 +109,7 @@ function permSettings(me) {
     return h('label', { class: 'perm-row' }, cb, h('span', {}, h('b', {}, text), h('span', { class: 'dim' }, sub)));
   };
   const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'new-password', maxlength: 32,
-    placeholder: me.pin_set ? '已设置（留空不改）' : '至少 4 位，不设就只有这台电脑是房主' });
+    placeholder: me.pin_set ? '已设置（留空不改）' : `至少 4 位，不设就只有这台${host.device}是房主` });
   const save = async (body) => {
     try {
       await api.post('/api/perm/settings', body);
@@ -119,12 +119,12 @@ function permSettings(me) {
     } catch (e) { toast(e.message, 'err'); }
   };
   const box = h('div', { style: { textAlign: 'left' } }, h('h2', { style: { textAlign: 'center' } }, '权限设置'),
-    h('div', { class: 'sub', style: { textAlign: 'center' } }, '运行游戏的这台电脑始终是房主，可以管理所有牌桌、使用训练中心。'),
+    h('div', { class: 'sub', style: { textAlign: 'center' } }, `运行游戏的这台${host.device}始终是房主，可以管理所有牌桌${me.train === false ? '' : '、使用训练中心'}。`),
     h('div', { class: 'perm-list' },
       check('guest_create', '其他设备可以开桌', '手机等设备可以自己开一桌，并且只能管理（暂停、结束、关闭）自己开的牌桌'),
-      check('guest_train', '其他设备可以使用训练中心', '关闭时只有房主能开始、停止训练和整理模型')),
+      me.train === false ? null : check('guest_train', '其他设备可以使用训练中心', '关闭时只有房主能开始、停止训练和整理模型')),
     h('div', { class: 'field', style: { marginTop: '12px' } }, h('label', {}, '房主密码'), pin,
-      h('span', { class: 'hint' }, '其他设备在首页点“房主登录”输入它，就和这台电脑一样是房主。修改或清除密码会让已登录的设备全部退出。')),
+      h('span', { class: 'hint' }, `其他设备在首页点“房主登录”输入它，就和这台${host.device}一样是房主。修改或清除密码会让已登录的设备全部退出。`)),
     h('div', { class: 'actions' },
       me.pin_set ? h('button', { class: 'btn danger', onclick: () => save({ ...st, pin: '' }) }, '清除密码') : null,
       h('button', { class: 'btn', onclick: () => m.close() }, '取消'),
@@ -277,10 +277,10 @@ async function viewSetup() {
         h('div', { class: 'panel' }, h('h2', {}, '座位'),
           h('p', { class: 'muted', style: { margin: '0 0 6px', fontSize: '13px' } }, teach ? '教学模式固定为你与三个 AI。' : '对家是你的队友。设为“玩家”的座位，可由同一 WiFi 下的手机或电脑扫码加入。'),
           mini,
-          humans > 0 ? h('div', { class: 'field', style: { marginTop: '8px' } }, h('label', {}, '这台电脑'),
+          humans > 0 ? h('div', { class: 'field', style: { marginTop: '8px' } }, h('label', {}, `这台${host.device}`),
             h('div', { class: 'choice-row' },
-              choice(cfg.hostPlays, '入座打牌', teach ? '在这台电脑上打。' : '你在这台电脑上坐南家（第一个“玩家”座位）。', () => { cfg.hostPlays = true; render(); }),
-              choice(!cfg.hostPlays, '只做主机', '这台电脑只运行 AI 和显示牌桌，用手机等其他设备扫码入座（看不到任何人的手牌）。', () => { cfg.hostPlays = false; render(); }),
+              choice(cfg.hostPlays, '入座打牌', teach ? `在这台${host.device}上打。` : `你在这台${host.device}上坐南家（第一个“玩家”座位）。`, () => { cfg.hostPlays = true; render(); }),
+              choice(!cfg.hostPlays, '只做主机', `这台${host.device}只运行 AI 和显示牌桌，用手机等其他设备扫码入座（看不到任何人的手牌）。`, () => { cfg.hostPlays = false; render(); }),
             )) : null,
           h('p', { class: 'dim', style: { fontSize: '13px' } }, humans === 0 ? '四个座位都是 AI：你将以观战者身份旁观（可看到所有手牌）。'
             : !cfg.hostPlays ? `开桌后用手机扫牌桌上的二维码入座（共 ${humans} 个玩家座位）。`

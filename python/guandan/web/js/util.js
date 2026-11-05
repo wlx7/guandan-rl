@@ -31,9 +31,15 @@ export function wsAuth() {
   const t = adminToken.get();
   return 'device=' + encodeURIComponent(device) + (t ? '&admin=' + encodeURIComponent(t) : '');
 }
-// {admin, local, pin_set, guest_create, guest_train}
+// what runs the server: 电脑, or 手机 in the Android app (set from /api/me)
+export const host = { device: '电脑' };
+// {admin, local, pin_set, guest_create, guest_train, train?, host_device?}
 export async function getMe() {
-  try { return await api.get('/api/me'); } catch { return { admin: false, local: false, pin_set: false, guest_create: true, guest_train: false }; }
+  try {
+    const me = await api.get('/api/me');
+    if (me.host_device) host.device = me.host_device;
+    return me;
+  } catch { return { admin: false, local: false, pin_set: false, guest_create: true, guest_train: false }; }
 }
 
 export const api = {

@@ -4,6 +4,7 @@ version = "1.7.10"
 edition = "2021"
 description = "High performance Guandan rules engine for reinforcement learning"
 license = "MIT"
+exclude = ["/android"]
 
 [lib]
 name = "_core"

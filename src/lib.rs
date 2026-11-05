@@ -10,3 +10,6 @@ pub mod venv;
 
 #[cfg(feature = "python")]
 mod py;
+
+/// Version of the whole project (the Python package and the Android app use the same number).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
