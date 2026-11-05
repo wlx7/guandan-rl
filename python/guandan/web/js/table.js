@@ -1018,8 +1018,16 @@ export function mountTable(app, roomId, watch) {
     else if (S.away) { S.away = false; connect(); }
   };
   const onHide = () => goAway();
+  // the Android app tells the page when it goes to the background or comes back (its WebView
+  // does not always report it as a hidden page)
+  const onApp = (e) => {
+    clearTimeout(hideTimer);
+    if (e.detail && e.detail.visible === false) goAway();
+    else if (S.away) { S.away = false; connect(); }
+  };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('pagehide', onHide);
+  window.addEventListener('gd-app-visibility', onApp);
   loadPerm();
   connect();
 
@@ -1031,6 +1039,7 @@ export function mountTable(app, roomId, watch) {
     window.removeEventListener('keydown', onKey);
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('pagehide', onHide);
+    window.removeEventListener('gd-app-visibility', onApp);
     clearTimeout(hideTimer);
     clearTimeout(sizeTimer);
     if (S.modal) S.modal.close();

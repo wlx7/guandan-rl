@@ -27,14 +27,17 @@ pub fn evaluate(net: &Net, g: &Game) -> Vec<(Move, f32)> {
 }
 
 pub fn choose(net: &Net, g: &Game) -> Move {
-    evaluate(net, g).swap_remove(0).0
+    evaluate(net, g).into_iter().next().map(|x| x.0).unwrap_or_else(Move::pass)
 }
 
 /// The simple rule bot (used if something goes wrong with the network).
 pub fn rule_move(g: &Game) -> Move {
     let moves = g.legal_moves();
+    if moves.is_empty() {
+        return Move::pass();
+    }
     let i = guandan_core::bot::rule_choose(g, &moves);
-    moves[i].clone()
+    moves.get(i).cloned().unwrap_or_else(Move::pass)
 }
 
 /// A random legal move; used when a human player times out (no pass if anything can be played).

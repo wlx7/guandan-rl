@@ -144,14 +144,21 @@ public class MainActivity extends Activity {
         super.onResume();
         visible = true;
         web.onResume();
+        tellPage(true);
         if (Server.port() > 0) ServerService.start(this);
     }
 
     @Override
     protected void onPause() {
         visible = false;
+        tellPage(false); // the page gives up its seat: the table pauses or the AI plays for you
         web.onPause();
         super.onPause();
+    }
+
+    private void tellPage(boolean shown) {
+        if (web.getUrl() == null) return;
+        web.evaluateJavascript("window.dispatchEvent(new CustomEvent('gd-app-visibility',{detail:{visible:" + shown + "}}))", null);
     }
 
     @Override
