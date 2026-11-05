@@ -77,7 +77,8 @@ class Room:
         self.game = self.new_game()
         self.status = "waiting"
         self.seq = 0
-        self.event: dict = {"type": "deal"}
+        self.event_no = 0
+        self.event: dict = {"type": "deal", "id": 0}
         self.trick: dict[int, dict] = {}
         self.deadline: float | None = None
         self.inbox = [asyncio.Queue() for _ in range(4)]
@@ -93,6 +94,11 @@ class Room:
         self.owner = ""  # device id of the browser that opened the table (may manage it like the host)
         self.idents: dict = {}  # websocket -> who it is (see app.ident)
         self.last_active = time.time()
+
+    def new_event(self, ev: dict):
+        self.event_no += 1
+        ev["id"] = self.event_no
+        self.event = ev
 
     def new_game(self):
         if self.length == "full":
@@ -214,7 +220,7 @@ class Room:
     def maybe_start(self):
         if self.status == "waiting" and all(s.taken and s.connected for s in self.human_seats()):
             self.status = "playing"
-            self.event = {"type": "deal"}
+            self.new_event({"type": "deal"})
             self.task = asyncio.get_running_loop().create_task(self.loop())
             return True
         return False
@@ -338,15 +344,15 @@ class Room:
         phase_before = g.phase
         g.apply(kind, key, cards)
         if phase_before == PHASE_RETURN:
-            self.event = {"type": "return", "from": p, "to": [t for t in g.tribute() if t[3]][-1][1],
-                          "card": cards[0], "how": how}
+            self.new_event({"type": "return", "from": p, "to": [t for t in g.tribute() if t[3]][-1][1],
+                            "card": cards[0], "how": how})
             if g.phase == PHASE_PLAY:
                 self.trick = {}
             return
         info = self.move_info(kind, key, cards)
         self.trick[p] = dict(info, pass_=kind == KIND_PASS)
-        self.event = dict(info, type="pass" if kind == KIND_PASS else "play", player=p, how=how,
-                          bomb=kind in BOMB_KINDS, finished=p in g.finished and kind != KIND_PASS)
+        self.new_event(dict(info, type="pass" if kind == KIND_PASS else "play", player=p, how=how,
+                            bomb=kind in BOMB_KINDS, finished=p in g.finished and kind != KIND_PASS))
         if g.phase in (PHASE_ROUND_OVER, PHASE_MATCH_OVER):
             r = g.last_result()
             self.event["round_over"] = True
@@ -479,7 +485,7 @@ class Room:
             await self.broadcast()
             await asyncio.sleep(1.2)
             if g.phase == PHASE_RETURN or g.tribute():
-                self.event = {"type": "tribute"}
+                self.new_event({"type": "tribute"})
                 await self.broadcast()
                 await asyncio.sleep(1.0)
             while not self.closed:
@@ -497,11 +503,11 @@ class Room:
                         g.next_round()
                     self.trick = {}
                     self.review = None
-                    self.event = {"type": "deal"}
+                    self.new_event({"type": "deal"})
                     await self.broadcast()
                     await asyncio.sleep(1.4)
                     if g.tribute():
-                        self.event = {"type": "tribute"}
+                        self.new_event({"type": "tribute"})
                         await self.broadcast()
                         await asyncio.sleep(1.2)
                     continue

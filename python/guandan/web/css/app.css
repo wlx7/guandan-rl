@@ -613,6 +613,9 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .hint-row .d, .hint-row .v { font-size: 12.5px; }
   .hint-row .mini { display: none; }
   .hint-row .bar { height: 3px; }
+  /* notices in the middle of the table, small, instead of over the left player */
+  body.in-game .toast-layer { top: 34%; left: 50%; transform: translateX(-50%); justify-items: center; width: min(420px, 70vw); }
+  body.in-game .toast { font-size: 13px; padding: 6px 12px; }
   /* setup: the start button stays in view while scrolling the options */
   .start-row { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: 10px; z-index: 20; margin: 0 !important; }
   .start-row .btn { box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); padding: 0.6em 2em; }

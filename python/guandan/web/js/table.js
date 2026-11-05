@@ -130,8 +130,10 @@ export function mountTable(app, roomId, watch) {
   function onState(s) {
     const prev = S.s;
     S.offset = s.server_time - Date.now();
-    const isNew = !prev || s.seq !== prev.seq;
     const ev = s.event || {};
+    // a state can be sent again without anything happening (a player joins, pauses, gets ready):
+    // animate and announce only events that were not shown yet
+    const isNew = !prev || (s.seq !== prev.seq && (ev.id == null || !prev.event || prev.event.id !== ev.id));
     let flyFrom = null;
     if (isNew && prev && ev.type === 'play' && ev.player === you()) flyFrom = captureHandRects(ev.cards);
     const newRound = !prev || prev.round_no !== s.round_no || prev.match_no !== s.match_no || (prev.phase >= 2 && s.phase < 2);
@@ -321,8 +323,18 @@ export function mountTable(app, roomId, watch) {
     const zl = zoneEls[3], zr = zoneEls[1];
     if (!compactMQ.matches) { zl.style.left = ''; zr.style.right = ''; return; }
     const br = board.getBoundingClientRect();
-    const L = seatEls[3].getBoundingClientRect();
-    const R = seatEls[1].getBoundingClientRect();
+    // the seat's box plus whatever sticks out of it (card counter, place badge)
+    const span = (el) => {
+      let a = Infinity, b = -Infinity;
+      for (const e of [el, ...el.querySelectorAll('*')]) {
+        const r = e.getBoundingClientRect();
+        if (!r.width) continue;
+        a = Math.min(a, r.left); b = Math.max(b, r.right);
+      }
+      return { left: a, right: b, width: b > a ? b - a : 0 };
+    };
+    const L = span(seatEls[3]);
+    const R = span(seatEls[1]);
     if (L.width) zl.style.left = `${Math.round(L.right - br.left + 8)}px`;
     if (R.width) zr.style.right = `${Math.round(br.right - R.left + 8)}px`;
   }
