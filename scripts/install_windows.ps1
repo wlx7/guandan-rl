@@ -3,6 +3,8 @@
 $ErrorActionPreference = 'Continue'
 Set-Location -Path $PSScriptRoot
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+# Windows PowerShell 5 may still offer old TLS versions first, which GitHub refuses now and then
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 $log = Join-Path $PSScriptRoot 'install_log.txt'
 Start-Transcript -Path $log -Force | Out-Null
 function Step($m) { Write-Host "`n=== $m ===" -ForegroundColor Yellow }
@@ -72,18 +74,30 @@ try {
   Step '4/4 安装 掼蛋 AI'
   # pick the highest version among GitHub release assets and wheels already in this folder
   $cands = @()
-  try {
-    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $rels = Invoke-RestMethod "https://api.github.com/repos/wlx7/guandan-rl/releases?per_page=20&t=$stamp" -Headers @{ 'User-Agent' = 'guandan-installer'; 'Cache-Control' = 'no-cache' }
-    foreach ($r in @($rels)) { foreach ($a in @($r.assets)) { if ($a.name -like '*win_amd64.whl') { $cands += [pscustomobject]@{ Name = $a.name; Url = $a.browser_download_url } } } }
-  } catch { Write-Host "无法访问 GitHub：$_" }
+  $online = $false
+  for ($try = 1; $try -le 4 -and -not $online; $try++) {
+    try {
+      $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+      $rels = Invoke-RestMethod "https://api.github.com/repos/wlx7/guandan-rl/releases?per_page=20&t=$stamp" -Headers @{ 'User-Agent' = 'guandan-installer'; 'Cache-Control' = 'no-cache' } -TimeoutSec 30
+      foreach ($r in @($rels)) { foreach ($a in @($r.assets)) { if ($a.name -like '*win_amd64.whl') { $cands += [pscustomobject]@{ Name = $a.name; Url = $a.browser_download_url } } } }
+      $online = $true
+    } catch {
+      Write-Host "第 $try 次连接 GitHub 失败：$_"
+      if ($try -lt 4) { Start-Sleep -Seconds (3 * $try) }
+    }
+  }
+  if (-not $online) { Write-Host '没连上 GitHub：这次只能安装文件夹里已有的版本（不是最新版），请稍后再运行一次。' -ForegroundColor Yellow }
   foreach ($f in @(Get-ChildItem -Path $PSScriptRoot -Filter 'guandan_rl-*win_amd64.whl' -ErrorAction SilentlyContinue)) { $cands += [pscustomobject]@{ Name = $f.Name; Url = $null } }
   $best = $cands | Where-Object { $_.Name -match 'guandan_rl-(\d+\.\d+\.\d+)' } | Sort-Object { [version]([regex]::Match($_.Name, 'guandan_rl-(\d+\.\d+\.\d+)').Groups[1].Value) } -Descending | Select-Object -First 1
   if (-not $best) { throw '找不到 Windows 安装包（guandan_rl-*-win_amd64.whl）' }
   $src = Join-Path $PSScriptRoot $best.Name
   if (-not (Test-Path $src)) {
     Write-Host "下载 $($best.Url)"
-    Invoke-WebRequest $best.Url -OutFile $src
+    for ($try = 1; $try -le 4; $try++) {
+      try { Invoke-WebRequest $best.Url -OutFile "$src.part" -TimeoutSec 120; Move-Item -Force "$src.part" $src; break }
+      catch { Write-Host "第 $try 次下载失败：$_"; Remove-Item -Force "$src.part" -ErrorAction SilentlyContinue; if ($try -lt 4) { Start-Sleep -Seconds (3 * $try) } }
+    }
+    if (-not (Test-Path $src)) { throw "下载失败：$($best.Url)" }
   }
   # the game must not run while its files are replaced: close it here and open it again afterwards
   $here = { param($p) $p.ExecutablePath -and $p.ExecutablePath.StartsWith($PSScriptRoot, [System.StringComparison]::OrdinalIgnoreCase) }
@@ -104,7 +118,9 @@ try {
   if ($LASTEXITCODE -ne 0) { uv pip install --python "$py" --reinstall-package guandan-rl "$src" -i $tuna }
   & $py -m guandan info 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { throw '安装验证失败' }
-  Write-Host "`nINSTALL_OK  安装完成！双击 start_windows.bat 启动。" -ForegroundColor Green
+  $ver = [regex]::Match($best.Name, 'guandan_rl-(\d+\.\d+\.\d+)').Groups[1].Value
+  Write-Host "`nINSTALL_OK  安装完成（版本 $ver）！双击 start_windows.bat 启动。" -ForegroundColor Green
+  if (-not $online) { Write-Host '注意：没连上 GitHub，装的是文件夹里已有的版本，不一定是最新版。' -ForegroundColor Yellow }
   if ($restart) {
     Write-Host '重新打开游戏…'
     Start-Process -FilePath (Join-Path $PSScriptRoot 'start_windows.bat') -WorkingDirectory $PSScriptRoot
