@@ -11,6 +11,9 @@ const pref = {
   set(k, v) { try { localStorage.setItem('gd_' + k, JSON.stringify(v)); } catch {} },
 };
 
+// landscape phones: see renderActions (same breakpoint as the short-screen CSS)
+const compactMQ = window.matchMedia('(max-height: 520px)');
+
 export function mountTable(app, roomId, watch) {
   // watch: open the table as a spectator even if this device has a seat there
   const mine = seatStore.get(roomId);
@@ -392,8 +395,14 @@ export function mountTable(app, roomId, watch) {
       const cur = s.current;
       kids.push(h('span', { class: 'wait' }, you() < 0 ? `观战中，轮到 ${nameOf(cur)}` : `等待 ${nameOf(cur)}${s.phase === 0 ? ' 还贡' : ' 出牌'}…`));
     }
-    actionbar.replaceChildren(...kids.filter(Boolean));
-    // tools: a bar over the bottom edge of the hand (left: arrange, middle: straight flushes,
+    // landscape phones (short screens): the table between the top bar and the hand is only about
+    // 90 px high, so the play buttons go to the tool bar under the hand (middle) instead of
+    // floating above the hand, where large plays of the other players would cover them
+    const playKids = kids.filter(Boolean);
+    const inBar = compactMQ.matches && !!myTurn() && playKids.length > 0;
+    board.classList.toggle('bar-play', inBar);
+    actionbar.replaceChildren(...(inBar ? [] : playKids));
+    // tools: a bar under the hand (left: arrange, middle: straight flushes or the play buttons,
     // right: selection tools and switches)
     const L = [], M = [], R = [];
     const cards = myHand();
@@ -410,7 +419,7 @@ export function mountTable(app, roomId, watch) {
         const list = straightFlushes(cards, s.level, su);
         sf.appendChild(h('button', { class: 'sfb' + (su === 1 || su === 3 ? ' red' : ''), disabled: !list.length, title: SUITS[su], 'aria-label': SUITS[su], onclick: () => pickSF(su), html: suitSvg(su) }));
       }
-      M.push(sf);
+      if (inBar) R.push(sf); else M.push(sf);
       if (S.sel.size) {
         R.push(h('button', { class: 'btn small', title: '把选中的牌放成一列', onclick: groupSelected }, '理牌'));
         R.push(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); } }, '重选'));
@@ -423,6 +432,7 @@ export function mountTable(app, roomId, watch) {
     if (s.mode === 'teach' && you() >= 0) {
       R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
     }
+    if (inBar) M.push(h('div', { class: 'play-group' }, ...playKids));
     toolsEl.replaceChildren(h('div', { class: 'g l' }, ...L), h('div', { class: 'g m' }, ...M), h('div', { class: 'g r' }, ...R));
     toolsEl.classList.toggle('blank', !(L.length || M.length || R.length));
   }
@@ -945,7 +955,21 @@ export function mountTable(app, roomId, watch) {
     m = modal(box, { onClose: () => {} });
   }
 
-  const onResize = () => { if (S.s && S.s.status === 'playing') renderHand(); };
+  // tell the host the real usable screen size of this device (phones differ; this is what the
+  // layout has to fit) - at most once a few seconds after it settles
+  let sizeTimer = 0;
+  const reportSize = () => {
+    clearTimeout(sizeTimer);
+    sizeTimer = setTimeout(() => {
+      api.post('/api/client', {
+        w: window.innerWidth, h: window.innerHeight, sw: screen.width, sh: screen.height,
+        dpr: window.devicePixelRatio || 1, fullscreen: !!(document.fullscreenElement || document.webkitFullscreenElement),
+        ua: navigator.userAgent.slice(0, 200),
+      }).catch(() => {});
+    }, 2500);
+  };
+  reportSize();
+  const onResize = () => { reportSize(); if (S.s && S.s.status === 'playing') { renderActions(); renderHand(); } };
   window.addEventListener('resize', onResize);
   const onKey = (e) => {
     if (!myTurn() || e.target.tagName === 'INPUT') return;
@@ -979,6 +1003,7 @@ export function mountTable(app, roomId, watch) {
     document.removeEventListener('visibilitychange', onVis);
     window.removeEventListener('pagehide', onHide);
     clearTimeout(hideTimer);
+    clearTimeout(sizeTimer);
     if (S.modal) S.modal.close();
     try { S.ws && S.ws.close(); } catch {}
     document.querySelectorAll('.modal-back, .flycard, .boom').forEach((x) => x.remove());

@@ -553,6 +553,16 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .seat.top .mini-hand { max-width: 200px; }
   .actionbar { bottom: 4px; }
   .actionbar .wait { display: none; }
+  /* your turn: the play buttons sit in the middle of the tool bar under the hand, so your own
+     last play can stay visible above the hand */
+  .board.myturn.bar-play .zone.bottom { visibility: visible; }
+  .hand-bar .play-group { display: flex; gap: 6px; align-items: center; }
+  .hand-bar .play-group .btn { padding: 0.3em 1.15em; font-size: 15px; min-width: 4.4em; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35); }
+  .hand-bar .play-group .btn:not(.primary) { background: rgba(5, 28, 22, 0.92); }
+  .hand-bar .timer-text { font-family: var(--num); font-size: 18px; min-width: 1.6em; text-align: center; color: var(--brass-hi); }
+  .hand-bar .timer-text.warn { color: var(--cinnabar-hi); animation: blink 0.5s steps(2) infinite; }
+  .hand-bar .yourturn { font-size: 14px; }
+  .hand-bar { padding-top: 3px; padding-bottom: max(3px, env(safe-area-inset-bottom)); }
   .actionbar .btn { padding: 0.28em 1em; font-size: 15px; }
   .topbar { padding: 2px 10px 0; }
   .plaque { padding: 1px 12px; min-width: 66px; }
@@ -565,6 +575,16 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .counter .cc { min-width: 18px; padding: 0 2px; }
   .counter .cc .l { font-size: 9.5px; }
   .counter .cc b { font-size: 11.5px; }
+}
+@media (max-height: 520px) and (max-width: 800px) {
+  .hand-bar .btn.small { padding: 0.25em 0.6em; font-size: 12px; }
+  .hand-bar .g { gap: 4px; }
+  .board.bar-play ~ .hand-bar .sfpick .lab { display: none; }
+  .board.bar-play ~ .hand-bar .sfpick { padding-left: 4px; }
+}
+@media (max-height: 330px) {
+  /* very short (a phone browser with its address bar): smaller played cards */
+  :root { --pcw: 32px; --pch: 45px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

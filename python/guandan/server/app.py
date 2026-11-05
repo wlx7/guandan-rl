@@ -148,6 +148,29 @@ def api_perm_settings(body: dict, request: Request):
     return api_me(request)
 
 
+# screen sizes the browsers report (to fit the table layout to the phones actually used)
+CLIENTS: list[dict] = []
+
+
+@app.post("/api/client")
+def api_client(body: dict, request: Request):
+    i = ident(request)
+    row = {"t": time.strftime("%H:%M:%S"), "host": i["host"], "device": i["device"][:8]}
+    for k in ("w", "h", "sw", "sh", "dpr", "fullscreen", "ua"):
+        v = body.get(k)
+        if isinstance(v, (int, float, bool)) or (isinstance(v, str) and len(v) <= 200):
+            row[k] = v
+    CLIENTS.append(row)
+    del CLIENTS[:-40]
+    return {"ok": True}
+
+
+@app.get("/api/clients")
+def api_clients(request: Request):
+    need_admin(request, "查看设备屏幕信息")
+    return {"clients": CLIENTS[::-1]}
+
+
 @app.get("/api/info")
 def api_info():
     try:
