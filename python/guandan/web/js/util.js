@@ -1,5 +1,10 @@
 // Shared helpers
 
+// older phone browsers / Android WebViews (before Chrome 86) lack replaceChildren
+if (!Element.prototype.replaceChildren) {
+  Element.prototype.replaceChildren = function (...nodes) { this.textContent = ''; this.append(...nodes); };
+}
+
 // this browser's id (tables it opens belong to it) and, after "房主登录", its host token
 function randomId() {
   try {
