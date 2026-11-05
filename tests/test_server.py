@@ -107,3 +107,16 @@ def test_several_tables_pause_and_close(client):
     with client.websocket_connect(f"/ws?token={a['token']}") as ws:
         assert ws.receive_json()["fatal"]
     client.post("/api/room/close", json={"room": b["room"]})
+
+
+def test_player_ends_the_table(client):
+    r = client.post("/api/room/create", json={"mode": "teach", "length": "quick", "model": "models/test.pt", "ai_speed": 5}).json()
+    with client.websocket_connect(f"/ws?token={r['token']}") as ws:
+        _state(ws, lambda m: m["status"] == "playing")
+        ws.send_json({"action": "end"})
+        for _ in range(50):
+            m = ws.receive_json()
+            if m.get("type") == "closed":
+                break
+        assert m["type"] == "closed" and "结束" in m["message"]
+    assert r["room"] not in [x["id"] for x in client.get("/api/rooms").json()["rooms"]]

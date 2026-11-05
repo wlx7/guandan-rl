@@ -303,9 +303,7 @@ async def api_room_close(body: dict | None = None):
     r = get_room(rid) if rid else None
     targets = [r] if r is not None else ([] if rid else rooms())  # no id: close all (old clients)
     for x in targets:
-        x.close()
-        for ws in [w for s in x.seats for w in s.connections] + list(x.spectators):
-            await x.send(ws, {"type": "error", "message": "牌桌已关闭", "fatal": True})
+        await x.end("房主关闭了这张牌桌")
         STATE["rooms"].pop(x.id, None)
     return {"ok": True}
 

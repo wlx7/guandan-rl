@@ -102,6 +102,13 @@ export function mountTable(app, roomId, watch) {
       }
       return;
     }
+    if (m.type === 'closed') { // the table was ended (by a player or the host)
+      S.closed = true;
+      if (S.modal) S.modal.close();
+      toast(m.message || '牌桌已关闭');
+      setTimeout(() => { location.hash = '#/'; }, S.ending ? 200 : 1500);
+      return;
+    }
     if (m.type === 'choose') { S.busy = false; return chooseDialog(m.options); }
     if (m.type === 'hints') { S.hints = m.hints; S.hintsSeq = m.seq; return renderSide(); }
   }
@@ -733,6 +740,7 @@ export function mountTable(app, roomId, watch) {
         rows, change,
         h('div', { class: 'actions' },
           you() >= 0 ? h('button', { class: 'btn primary', disabled: meReady, onclick: () => send({ action: 'ready' }) }, meReady ? '已准备' : btnText) : null,
+          canEnd() ? h('button', { class: 'btn danger', onclick: endTable }, '结束牌局') : null,
           h('button', { class: 'btn', onclick: leave }, '离开')),
         waiting.length && (meReady || you() < 0) ? h('div', { class: 'sub', style: { marginTop: '10px' } }, `等待：${waiting.join('、')}`) : null,
       ].filter(Boolean));
@@ -910,7 +918,25 @@ export function mountTable(app, roomId, watch) {
     let m;
     box.appendChild(h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => m.close() }, '留下'),
-      h('button', { class: 'btn danger', onclick: () => { m.close(); location.hash = '#/'; } }, '离开')));
+      h('button', { class: 'btn primary', onclick: () => { m.close(); location.hash = '#/'; } }, '离开'),
+      canEnd() ? h('button', { class: 'btn danger', onclick: () => { m.close(); endTable(); } }, '结束牌局') : null));
+    m = modal(box, { onClose: () => {} });
+  }
+
+  // players, or the host computer watching, can end the table for good
+  const IS_HOST = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+  function canEnd() { return you() >= 0 || IS_HOST; }
+  function endTable() {
+    const s = S.s;
+    const others = s && s.seats.some((st, i) => i !== you() && st.kind === 'human' && st.taken);
+    const box = h('div', {}, h('h2', {}, '结束牌局？'),
+      h('div', { class: 'sub' }, '这张牌桌会关闭，进度不再保留' + (others ? '，桌上其他玩家也会回到首页。' : '。')));
+    let m;
+    box.appendChild(h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => { m.close(); if (fromResult) showResult(); } }, '取消'),
+      h('button', { class: 'btn danger', onclick: () => { m.close(); S.ending = true; send({ action: 'end' }); } }, '结束牌局')));
+    const fromResult = !!(S.modal && s && s.phase >= 2);
+    if (S.modal) { S.modal.close(); S.modal = null; }
     m = modal(box, { onClose: () => {} });
   }
 

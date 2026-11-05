@@ -216,6 +216,12 @@ class Room:
         if self.task:
             self.task.cancel()
 
+    async def end(self, message: str):
+        """Close the table for good and send everybody at it back to the home page."""
+        conns = [w for s in self.seats for w in s.connections] + list(self.spectators)
+        self.close()
+        await asyncio.gather(*(self.send(w, {"type": "closed", "message": message}) for w in conns))
+
     # ------------------------------------------------------------------ views
     def move_info(self, kind, key, cards):
         cards = list(cards)
@@ -597,6 +603,16 @@ class Room:
                 return
             hs = await asyncio.get_event_loop().run_in_executor(_executor, self.hints)
             await self.send(ws, {"type": "hints", "hints": hs, "seq": self.seq})
+            return
+        if act == "end":
+            # players at the table, or the host computer watching it, may end the table
+            client = getattr(ws, "client", None)
+            local = bool(client and client.host in ("127.0.0.1", "::1", "localhost"))
+            if seat < 0 and not local:
+                await self.send(ws, {"type": "error", "message": "观战时不能结束牌局"})
+                return
+            who = self.seats[seat].name if seat >= 0 else "房主"
+            await self.end(f"{who} 结束了这张牌桌")
             return
         if act in ("pause", "resume"):
             who = self.seats[seat].name if seat >= 0 else "房主"
