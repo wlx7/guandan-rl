@@ -88,6 +88,9 @@ class Room:
         self.score = [0, 0]  # matches won per team
         self.round_log: list[dict] = []
         self.review: dict | None = None
+        self.paused = False  # play is stopped (see can_run) and goes on from the same spot later
+        self.manual_pause: str | None = None  # name of who pressed "暂停", None when not paused by hand
+        self.last_active = time.time()
 
     def new_game(self):
         if self.length == "full":
@@ -100,6 +103,35 @@ class Room:
     # ------------------------------------------------------------------ seats
     def human_seats(self):
         return [s for s in self.seats if s.kind == "human"]
+
+    def someone_here(self):
+        """A table with human players runs while at least one of them is connected; an all-AI
+        table runs while someone watches it."""
+        humans = self.human_seats()
+        if humans:
+            return any(s.connected for s in humans)
+        return bool(self.spectators)
+
+    def can_run(self):
+        """Play goes on unless someone pressed pause or nobody is at the table."""
+        return self.manual_pause is None and self.someone_here()
+
+    async def hold(self):
+        """Pause while nobody is at the table (play when you like, stop when you leave) or while
+        paused by hand; the game goes on from the same spot afterwards."""
+        if self.closed or self.can_run():
+            return
+        self.paused = True
+        self.deadline = None
+        await self.broadcast()
+        while not self.closed and not self.can_run():
+            await asyncio.sleep(0.3)
+        self.paused = False
+        await self.broadcast()
+        await asyncio.sleep(0.8)  # let the returning player see the table before play goes on
+
+    def set_pause(self, on: bool, by: str = ""):
+        self.manual_pause = (by or "有人") if on else None
 
     def join(self, seat_index: int | None, name: str, token: str | None = None):
         if token:
@@ -127,6 +159,27 @@ class Room:
             if s.token and s.token == token:
                 return s.index
         return None
+
+    def summary(self):
+        """What the table list shows: progress, who is playing, paused or not."""
+        g = self.game
+        info = self.public_info()
+        info.update({
+            "created": self.created,
+            "last_active": self.last_active,
+            "paused": self.paused or self.manual_pause is not None,
+            "pause_by": self.manual_pause,
+            "level": g.level,
+            "team_level": list(g.team_level),
+            "round_no": g.round_no if self.length == "full" else self.deals,
+            "match_no": self.match_no,
+            "score": self.score,
+            "points": self.points,
+            "humans": sum(1 for s in self.seats if s.kind == "human"),
+            "connected": sum(1 for s in self.seats if s.kind == "human" and s.connected),
+            "spectators": len(self.spectators),
+        })
+        return info
 
     def public_info(self):
         return {
@@ -199,7 +252,10 @@ class Room:
             "counts": counts,
             "finished": finished,
             "seats": [{"name": s.name, "kind": s.kind, "connected": s.connected or s.kind == "ai",
+                       "taken": s.taken or s.kind == "ai",
                        "ready": s.ready or s.kind == "ai"} for s in self.seats],
+            "paused": self.paused,
+            "pause_by": self.manual_pause,
             "trick": {str(k): val for k, val in self.trick.items()},
             "tribute": [{"from": a, "to": b, "card": c, "is_return": r} for (a, b, c, r) in g.tribute()],
             "pending_returns": [list(x) for x in g.pending_returns()],
@@ -259,6 +315,7 @@ class Room:
 
     # ------------------------------------------------------------------ actions
     def _apply(self, p, mv, how="normal"):
+        self.last_active = time.time()
         g = self.game
         kind, key, cards = mv[0], mv[1], list(mv[2])
         before_trick = g.trick_id
@@ -307,6 +364,16 @@ class Room:
             traceback.print_exc()
             moves = g.legal_moves()
             return moves[g.rule_choice()]
+
+    def auto_move(self, p):
+        """A player who left while others play on: the AI plays for them (托管)."""
+        g = self.game.copy()
+        try:
+            if self.hint_model:
+                return get_agent(self.hint_model, self.think).choose(g)
+        except Exception:
+            traceback.print_exc()
+        return g.legal_moves()[g.rule_choice()]
 
     def hints(self, k=5):
         g = self.game.copy()
@@ -371,10 +438,15 @@ class Room:
         humans = self.human_seats()
         if not humans:
             await asyncio.sleep(5)
+            await self.hold()
             return
         t_end = time.time() + (30 if self.mode == "real" else 1e9)
         while not self.closed:
-            if all(s.ready for s in humans):
+            if not self.can_run():
+                await self.hold()
+                t_end = time.time() + (30 if self.mode == "real" else 1e9)
+            # players who left do not hold up the others
+            if all(s.ready or not s.connected for s in humans):
                 return
             if self.mode == "real" and time.time() > t_end:
                 return
@@ -417,6 +489,9 @@ class Room:
                         await self.broadcast()
                         await asyncio.sleep(1.2)
                     continue
+                await self.hold()
+                if self.closed:
+                    break
                 p = g.current
                 seat = self.seats[p]
                 if seat.kind == "ai":
@@ -426,25 +501,16 @@ class Room:
                     rest = self.ai_delay() - (time.time() - t_think)
                     if rest > 0:
                         await asyncio.sleep(rest)
+                    if not self.can_run():  # everybody left (or paused) while the AI was thinking
+                        continue
                     self._apply(p, mv)
                 else:
-                    timed = self.mode == "real"
-                    self.deadline = time.time() + self.timeout if timed else None
-                    while not self.inbox[p].empty():
-                        self.inbox[p].get_nowait()
-                    await self.broadcast()
-                    how = "normal"
-                    try:
-                        if timed:
-                            mv = await asyncio.wait_for(self.wait_human(p), self.timeout + 0.3)
-                        else:
-                            mv = await self.wait_human(p)
-                    except asyncio.TimeoutError:
-                        mv = random_move(g)
-                        how = "timeout"
+                    mv, how = await self.human_turn(p)
+                    if mv is None:  # paused or closed: decide again from the top
+                        continue
                     self.deadline = None
                     self.review = None
-                    if self.mode == "teach" and self.hint_model and g.phase == PHASE_PLAY:
+                    if how == "normal" and self.mode == "teach" and self.hint_model and g.phase == PHASE_PLAY:
                         try:
                             self.review = await loop.run_in_executor(_executor, self.make_review, p, mv)
                         except Exception:
@@ -455,6 +521,45 @@ class Room:
             pass
         except Exception:
             traceback.print_exc()
+
+    async def human_turn(self, p):
+        """(move, how) for a human seat, or (None, None) when the table should pause first.
+        how: "normal", "timeout" (real mode, random move) or "auto" (the player left while
+        others play on, so the AI plays for them)."""
+        loop = asyncio.get_event_loop()
+        g = self.game
+        seat = self.seats[p]
+        if not self.can_run():
+            return None, None
+        if not seat.connected:
+            t0 = time.time()
+            mv = await loop.run_in_executor(_executor, self.auto_move, p)
+            rest = self.ai_delay() - (time.time() - t0)
+            if rest > 0:
+                await asyncio.sleep(rest)
+            if seat.connected or not self.can_run():  # came back meanwhile, everybody left, or paused
+                return None, None
+            return mv, "auto"
+        timed = self.mode == "real"
+        self.deadline = time.time() + self.timeout if timed else None
+        while not self.inbox[p].empty():
+            self.inbox[p].get_nowait()
+        await self.broadcast()
+        waiter = asyncio.ensure_future(self.wait_human(p))
+        try:
+            while not self.closed:
+                done, _ = await asyncio.wait({waiter}, timeout=0.3)
+                if done:
+                    return waiter.result(), "normal"
+                if not seat.connected or self.manual_pause:  # left or paused during the turn
+                    self.deadline = None
+                    return None, None
+                if timed and time.time() > self.deadline + 0.3:
+                    return random_move(g), "timeout"
+            return None, None
+        finally:
+            if not waiter.done():
+                waiter.cancel()
 
     def make_review(self, p, mv):
         """Teaching mode: compare the human's move with the AI's preferred move."""
@@ -492,6 +597,11 @@ class Room:
                 return
             hs = await asyncio.get_event_loop().run_in_executor(_executor, self.hints)
             await self.send(ws, {"type": "hints", "hints": hs, "seq": self.seq})
+            return
+        if act in ("pause", "resume"):
+            who = self.seats[seat].name if seat >= 0 else "房主"
+            self.set_pause(act == "pause", who)
+            await self.broadcast()
             return
         if act == "ready":
             if seat >= 0:

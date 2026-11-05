@@ -11,8 +11,11 @@ const pref = {
   set(k, v) { try { localStorage.setItem('gd_' + k, JSON.stringify(v)); } catch {} },
 };
 
-export function mountTable(app) {
-  const seat = seatStore.get() || { seat: -1, token: null };
+export function mountTable(app, roomId, watch) {
+  // watch: open the table as a spectator even if this device has a seat there
+  const mine = seatStore.get(roomId);
+  const seat = (!watch && mine && mine.token) ? mine : { room: roomId, seat: -1, token: null };
+  if (seat.token) seatStore.set(seat); // remember it as this device's current table
   const S = {
     s: null, prev: null, ws: null, closed: false, retry: 0,
     sel: new Set(), desc: true, reveal: false, hints: null, hintsSeq: -1,
@@ -28,6 +31,7 @@ export function mountTable(app) {
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
   const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
+  const pauseBtn = h('button', { class: 'btn small icon', title: '暂停', 'aria-label': '暂停牌局', onclick: () => send({ action: 'pause' }) }, '⏸');
   // full screen hides the phone browser's address bar (more room for the table)
   const canFull = !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
   const fullBtn = canFull ? h('button', { class: 'btn small icon', title: '全屏', 'aria-label': '全屏', onclick: toggleFull }, '⛶') : null;
@@ -44,7 +48,7 @@ export function mountTable(app) {
     }).catch(() => {});
   }
   const counterEl = h('div', { class: 'counter', title: '记牌器：其他三家手里还剩的牌（不含已出的牌和你的手牌）' });
-  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, fullBtn, helpBtn, soundBtn, counterEl);
+  const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, pauseBtn, fullBtn, helpBtn, soundBtn, counterEl);
   const board = h('div', { class: 'board' });
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
   const zoneEls = DIR.map((d) => h('div', { class: `zone ${d}` }));
@@ -62,7 +66,10 @@ export function mountTable(app) {
   function connect() {
     if (S.closed) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const q = seat.token ? `?token=${encodeURIComponent(seat.token)}` : '';
+    const qs = [];
+    if (roomId) qs.push('room=' + encodeURIComponent(roomId));
+    if (seat.token) qs.push('token=' + encodeURIComponent(seat.token));
+    const q = qs.length ? '?' + qs.join('&') : '';
     const ws = new WebSocket(`${proto}://${location.host}/ws${q}`);
     S.ws = ws;
     ws.onopen = () => { S.retry = 0; };
@@ -72,7 +79,7 @@ export function mountTable(app) {
       onMessage(m);
     };
     ws.onclose = () => {
-      if (S.closed) return;
+      if (S.closed || S.away) return;
       S.retry++;
       if (S.retry === 2) toast('连接中断，正在重连…', 'err');
       setTimeout(connect, Math.min(4000, 500 * S.retry));
@@ -105,7 +112,8 @@ export function mountTable(app) {
   const relOf = (p) => (p - base() + 4) % 4;
   const ourTeam = () => base() % 2;
   const nameOf = (p) => (S.s && S.s.seats[p] ? S.s.seats[p].name || `玩家${p + 1}` : '');
-  const myTurn = () => S.s && you() >= 0 && S.s.current === you() && S.s.status === 'playing' && (S.s.phase === 0 || S.s.phase === 1);
+  const isPaused = () => !!(S.s && (S.s.paused || S.s.pause_by));
+  const myTurn = () => S.s && you() >= 0 && !isPaused() && S.s.current === you() && S.s.status === 'playing' && (S.s.phase === 0 || S.s.phase === 1);
   const myHand = () => (S.s ? (you() >= 0 ? S.s.hand || [] : S.s.hands['0'] || []) : []);
 
   // ------------------------------------------------------------ state
@@ -171,6 +179,7 @@ export function mountTable(app) {
     renderSeats();
     renderZones();
     renderCenter();
+    renderPause();
     renderActions();
     renderHand();
     renderCounter();
@@ -219,6 +228,7 @@ export function mountTable(app) {
 
   function renderWaiting() {
     const s = S.s;
+    pauseBtn.style.display = 'none';
     seatEls.forEach((e) => e.replaceChildren());
     zoneEls.forEach((e) => e.replaceChildren());
     actionbar.replaceChildren();
@@ -239,13 +249,13 @@ export function mountTable(app) {
           h('div', { class: 'url-big', id: 'lanurl' }, '…'), list),
         h('div', { class: 'qr', id: 'qrbox' })),
       h('div', { style: { marginTop: '14px', display: 'flex', gap: '10px', flexWrap: 'wrap' } },
-        h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai').catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始'),
+        h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai', { room: s.room }).catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始'),
         h('button', { class: 'btn small', onclick: () => { location.hash = '#/'; } }, '返回首页')));
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
     api.get('/api/info').then((info) => {
       const url = (info.lan_urls && info.lan_urls[0]) || location.origin + '/';
-      const u = url + '#/join';
+      const u = url + '#/join/' + s.room;
       const el = document.getElementById('lanurl');
       if (el) el.textContent = u;
       const q = document.getElementById('qrbox');
@@ -285,7 +295,7 @@ export function mountTable(app) {
       const info = h('div', { class: 'info' },
         h('div', { class: 'nm', title: st.name }, st.name + (r === 0 && you() >= 0 && st.name !== '我' ? '（你）' : '')),
         r === 0 ? null : h('div', { class: 'count' + (cnt > 0 && cnt <= 6 ? ' low' : '') }, h('i', { class: 'cb' }), String(cnt)),
-        st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, '离线') : null);
+        st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, s.paused || s.status !== 'playing' ? '离线' : '离线 · AI 托管') : null);
       const kids = [av, info];
       const vis = s.hands[String(p)];
       const showHand = vis && r !== 0 && (s.mode !== 'teach' || S.reveal || you() < 0);
@@ -339,13 +349,28 @@ export function mountTable(app) {
     centerMsg.replaceChildren(...(box.childNodes.length ? [box] : []));
   }
 
+  function renderPause() {
+    const s = S.s;
+    pauseBtn.style.display = s.status === 'playing' && !isPaused() ? '' : 'none';
+    if (!isPaused() || s.phase >= 2) return;
+    const box = h('div', { class: 'panel pause-box' },
+      h('h2', {}, '牌局已暂停'),
+      h('div', { class: 'sub' }, s.pause_by ? `${s.pause_by} 按了暂停，点“继续”从原处接着打。`
+        : (s.seats.some((st) => st.kind === 'human') ? '玩家都离开了，他们回来后从原处继续。' : '没人观战时这桌会暂停。')),
+      s.pause_by ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => send({ action: 'resume' }) }, '继续')) : null);
+    centerMsg.replaceChildren(box);
+    centerMsg.style.pointerEvents = 'auto';
+  }
+
   function renderActions() {
     const s = S.s;
     if (!s) return;
     const kids = [];
     board.classList.toggle('myturn', !!myTurn());
     if (s.status !== 'playing') { actionbar.replaceChildren(); toolsEl.replaceChildren(); return; }
-    if (myTurn()) {
+    if (isPaused()) {
+      actionbar.replaceChildren();
+    } else if (myTurn()) {
       if (s.deadline) kids.push(h('span', { class: 'timer-text', id: 'timer' }, ''));
       if (s.phase === 0) {
         kids.push(h('span', { class: 'yourturn' }, '还贡'),
@@ -866,13 +891,22 @@ export function mountTable(app) {
         row('接风', '出完最后一手牌没人要时，由队友接着出'),
         row('升级', '双上升 3 级，队友三游升 2 级，队友末游升 1 级')),
       h('div', { class: 'sub', style: { marginTop: '14px', textAlign: 'left' } },
-        '操作：点牌或按住拖动选牌（选中的牌变成金色），双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。选几张牌再点“理牌”，把它们放成一列；“一键理牌”自动把炸弹、同花顺、顺子、三带二等组合各放一列，“恢复”回到按点数排列；“同花顺 ♠♥♣♦”一键选出该花色的同花顺（含逢人配，再点换下一个）；“记牌器”显示其他三家还剩的各点数张数。'),
+        '随打随停：离开牌桌（或手机切到后台几秒）牌局就暂停，回来从原处接着打；有别的玩家在时，轮到你由 AI 托管。也可以点 ⏸ 暂停。操作：点牌或按住拖动选牌（选中的牌变成金色），双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。选几张牌再点“理牌”，把它们放成一列；“一键理牌”自动把炸弹、同花顺、顺子、三带二等组合各放一列，“恢复”回到按点数排列；“同花顺 ♠♥♣♦”一键选出该花色的同花顺（含逢人配，再点换下一个）；“记牌器”显示其他三家还剩的各点数张数。'),
       h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, '知道了')));
     const m = modal(box, { onClose: () => {} });
   }
 
   function leave() {
-    const box = h('div', {}, h('h2', {}, '离开牌桌？'), h('div', { class: 'sub' }, '牌桌会继续进行。之后可以从首页回到牌桌。'));
+    const s = S.s;
+    let sub = '之后可以从首页回到这张牌桌。';
+    if (s && you() >= 0 && s.status === 'playing') {
+      const others = s.seats.some((st, i) => i !== you() && st.kind === 'human' && st.connected);
+      sub = others ? '其他玩家会接着打，轮到你时由 AI 替你出牌（托管）。之后从首页“回到座位”接着打。'
+        : '牌局会暂停，之后从首页“回到座位”，从原处接着打。';
+    } else if (s && you() < 0 && !s.seats.some((st) => st.kind === 'human')) {
+      sub = '没人观战时这桌会暂停，之后从首页“观战”接着看。';
+    }
+    const box = h('div', {}, h('h2', {}, '离开牌桌？'), h('div', { class: 'sub' }, sub));
     let m;
     box.appendChild(h('div', { class: 'actions' },
       h('button', { class: 'btn', onclick: () => m.close() }, '留下'),
@@ -889,6 +923,19 @@ export function mountTable(app) {
     else if (e.key === 'Escape') { S.sel.clear(); renderHand(); renderActions(); }
   };
   window.addEventListener('keydown', onKey);
+  // a phone that goes to the home screen or locks keeps the connection alive for a while; give
+  // the seat up after a few seconds so that the table pauses (or the AI plays for you) instead of
+  // the turn clock running out, and reconnect when the page is shown again
+  let hideTimer = 0;
+  const goAway = () => { if (you() >= 0 && S.ws && !S.away) { S.away = true; try { S.ws.close(); } catch {} } };
+  const onVis = () => {
+    clearTimeout(hideTimer);
+    if (document.hidden) hideTimer = setTimeout(() => { if (document.hidden) goAway(); }, 3000);
+    else if (S.away) { S.away = false; connect(); }
+  };
+  const onHide = () => goAway();
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('pagehide', onHide);
   connect();
 
   return () => {
@@ -897,6 +944,9 @@ export function mountTable(app) {
     clearTimeout(S.heldTimer);
     window.removeEventListener('resize', onResize);
     window.removeEventListener('keydown', onKey);
+    document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('pagehide', onHide);
+    clearTimeout(hideTimer);
     if (S.modal) S.modal.close();
     try { S.ws && S.ws.close(); } catch {}
     document.querySelectorAll('.modal-back, .flycard, .boom').forEach((x) => x.remove());

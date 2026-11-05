@@ -72,3 +72,38 @@ def test_real_mode_hides_hands(client):
             if m["type"] == "error":
                 assert "实战" in m["message"] or "轮到" in m["message"]
                 return
+
+
+def _state(ws, cond, n=200):
+    for _ in range(n):
+        m = ws.receive_json()
+        if m.get("type") == "state" and cond(m):
+            return m
+    raise AssertionError("state not reached")
+
+
+def test_several_tables_pause_and_close(client):
+    for r in client.get("/api/rooms").json()["rooms"]:
+        client.post("/api/room/close", json={"room": r["id"]})
+    a = client.post("/api/room/create", json={"mode": "teach", "length": "quick", "model": "models/test.pt", "ai_speed": 5}).json()
+    b = client.post("/api/room/create", json={"mode": "real", "length": "quick", "model": "models/test.pt", "ai_speed": 5,
+                                              "seats": [{"kind": "ai"}] * 4}).json()
+    listed = {r["id"]: r for r in client.get("/api/rooms").json()["rooms"]}
+    assert set(listed) == {a["room"], b["room"]}
+    assert listed[a["room"]]["humans"] == 1 and listed[b["room"]]["humans"] == 0
+    # the player leaves table a: it pauses (a spectator sees it) and does not move on
+    with client.websocket_connect(f"/ws?token={a['token']}") as ws:
+        _state(ws, lambda m: m["status"] == "playing")
+    with client.websocket_connect(f"/ws?room={a['room']}") as spec:
+        m = _state(spec, lambda m: m["paused"])
+        assert m["you"] == -1
+    # pause by hand from the list, then resume
+    client.post("/api/room/pause", json={"room": b["room"], "paused": True})
+    assert {r["id"]: r for r in client.get("/api/rooms").json()["rooms"]}[b["room"]]["pause_by"] == "房主"
+    client.post("/api/room/pause", json={"room": b["room"], "paused": False})
+    # closing one table leaves the other
+    client.post("/api/room/close", json={"room": a["room"]})
+    assert [r["id"] for r in client.get("/api/rooms").json()["rooms"]] == [b["room"]]
+    with client.websocket_connect(f"/ws?token={a['token']}") as ws:
+        assert ws.receive_json()["fatal"]
+    client.post("/api/room/close", json={"room": b["room"]})

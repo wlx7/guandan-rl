@@ -34,21 +34,21 @@ async function viewHome() {
     joinSlot,
     foot,
   )));
+  let timer = 0;
+  let stopped = false;
+  window.addEventListener('hashchange', () => { stopped = true; clearTimeout(timer); }, { once: true });
+  async function refresh() {
+    if (stopped) return;
+    try {
+      const { rooms, max } = await api.get('/api/rooms');
+      seatStore.keep(rooms.map((r) => r.id));
+      joinSlot.replaceChildren(...(rooms.length ? [tableList(rooms, max, refresh)] : []));
+    } catch {}
+    if (!stopped) timer = setTimeout(refresh, 3000);
+  }
+  refresh();
   try {
-    const [info, room] = await Promise.all([api.get('/api/info'), api.get('/api/room')]);
-    const mine = seatStore.get();
-    if (room.exists) {
-      const open = room.seats.filter((s) => s.kind === 'human' && !s.taken).length;
-      const isMine = mine && mine.room === room.id;
-      const modeName = room.mode === 'teach' ? '教学模式' : '实战模式';
-      const lenName = room.length === 'quick' ? '快速对局' : '竞技模式';
-      joinSlot.appendChild(h('div', { class: 'join-strip' },
-        h('span', {}, `当前牌桌：${modeName}，${lenName}，`, open ? `还差 ${open} 位玩家` : (room.status === 'playing' ? '对局进行中' : '等待开始')),
-        isMine ? h('a', { class: 'btn small primary', href: '#/table' }, '回到牌桌')
-          : open ? h('a', { class: 'btn small primary', href: '#/join' }, '加入')
-            : h('a', { class: 'btn small', href: '#/join' }, '观战'),
-      ));
-    }
+    const info = await api.get('/api/info');
     const dev = info.device || {};
     foot.append(...[
       h('span', {}, info.portable ? '免安装版（只能对战）' : dev.cuda ? `GPU：${dev.gpu}` : (dev.torch ? 'CPU 模式' : '未安装 PyTorch（只能对战）')),
@@ -59,6 +59,68 @@ async function viewHome() {
   } catch (e) {
     foot.append(h('span', {}, '无法连接服务：' + e.message));
   }
+}
+
+// the computer that runs the server manages the tables (pause, close); phones just join
+const IS_HOST = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+const DIRS = ['南', '东', '北', '西'];
+const LV = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+function tableStatus(r) {
+  if (r.status === 'waiting') return ['wait', `等人加入（${r.connected}/${r.humans}）`];
+  if (r.pause_by) return ['pause', `已暂停（${r.pause_by}）`];
+  if (r.paused) return ['pause', r.humans ? '已暂停：玩家都离开了' : '已暂停：没人观战'];
+  return ['play', '进行中'];
+}
+
+function tableList(rooms, max, refresh) {
+  const box = h('div', { class: 'tables' },
+    h('div', { class: 'tables-head' }, h('b', {}, `牌桌（${rooms.length}/${max}）`),
+      h('span', { class: 'dim' }, '离开牌桌就自动暂停，回来从原处接着打；可以同时开几桌')));
+  for (const r of rooms) {
+    const mine = seatStore.get(r.id);
+    const [cls, text] = tableStatus(r);
+    const players = r.seats.map((st, i) => st.kind === 'ai' ? null
+      : h('span', { class: 'pl' + (st.connected ? ' on' : '') }, `${DIRS[i]} ${st.taken ? st.name : '空位'}`)).filter(Boolean);
+    const ais = r.seats.filter((st) => st.kind === 'ai').length;
+    const prog = r.status === 'waiting' ? '还没开始'
+      : r.length === 'quick' ? `第 ${r.round_no} 副 · 打 ${LV[r.level]} · 积分 ${r.points[0]} : ${r.points[1]}`
+        : `第 ${r.match_no} 场第 ${r.round_no} 局 · 南北 ${LV[r.team_level[0]]} / 东西 ${LV[r.team_level[1]]}`;
+    const free = r.seats.some((st) => st.kind === 'human' && !st.taken);
+    const enter = mine && mine.token
+      ? h('a', { class: 'btn small primary', href: `#/table/${r.id}` }, '回到座位')
+      : free ? h('a', { class: 'btn small primary', href: `#/join/${r.id}` }, '加入')
+        : null;
+    const watch = h('a', { class: 'btn small', href: `#/table/${r.id}/watch` }, '观战');
+    const manage = IS_HOST ? [
+      r.status === 'playing' ? h('button', { class: 'btn small', onclick: async () => {
+        try { await api.post('/api/room/pause', { room: r.id, paused: !r.pause_by }); refresh(); } catch (e) { toast(e.message, 'err'); }
+      } }, r.pause_by ? '继续' : '暂停') : null,
+      h('button', { class: 'btn small danger', onclick: () => closeTable(r, refresh) }, '关闭'),
+    ] : [];
+    box.appendChild(h('div', { class: 'table-card' },
+      h('div', { class: 'tc-top' },
+        h('b', {}, `${r.mode === 'teach' ? '教学' : '实战'} · ${r.length === 'quick' ? '快速对局' : '竞技（打到 A）'}`),
+        h('span', { class: 'chip ' + cls }, text)),
+      h('div', { class: 'tc-line' }, ...players, ais ? h('span', { class: 'pl ai' }, `AI ×${ais}`) : null,
+        r.spectators ? h('span', { class: 'dim' }, `${r.spectators} 人观战`) : null),
+      h('div', { class: 'tc-line dim' }, prog),
+      h('div', { class: 'tc-actions' }, enter, watch, ...manage)));
+  }
+  return box;
+}
+
+function closeTable(r, refresh) {
+  let m;
+  const box = h('div', {}, h('h2', {}, '关闭这张牌桌？'),
+    h('div', { class: 'sub' }, '牌局会结束，桌上的玩家会回到首页。'),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', onclick: () => m.close() }, '取消'),
+      h('button', { class: 'btn danger', onclick: async () => {
+        m.close();
+        try { await api.post('/api/room/close', { room: r.id }); refresh(); } catch (e) { toast(e.message, 'err'); }
+      } }, '关闭')));
+  m = modal(box, { onClose: () => {} });
 }
 
 // ---------------------------------------------------------------- setup
@@ -169,8 +231,7 @@ async function viewSetup() {
       };
       const r = await api.post('/api/room/create', body);
       if (r.token) seatStore.set({ room: r.room, seat: r.seat, token: r.token });
-      else seatStore.set({ room: r.room, seat: -1, token: null });
-      location.hash = '#/table';
+      location.hash = r.token ? `#/table/${r.room}` : `#/table/${r.room}/watch`;
     } catch (e) {
       toast(e.message, 'err');
     }
@@ -179,32 +240,42 @@ async function viewSetup() {
 }
 
 // ---------------------------------------------------------------- join (LAN players)
-async function viewJoin() {
+async function viewJoin(roomId) {
   const root = h('div', { class: 'page' });
   app.replaceChildren(root);
   let room;
+  let rooms = [];
   async function load() {
-    try { room = await api.get('/api/room'); } catch (e) { room = { exists: false }; }
+    try {
+      rooms = (await api.get('/api/rooms')).rooms;
+      const open = rooms.filter((r) => r.seats.some((st) => st.kind === 'human' && (!st.taken || (seatStore.get(r.id) || {}).token)));
+      const id = roomId || (open.length === 1 ? open[0].id : (rooms.length === 1 ? rooms[0].id : null));
+      room = id ? (await api.get('/api/room?id=' + encodeURIComponent(id))) : null;
+    } catch (e) { room = { exists: false }; }
     render();
   }
   function render() {
     const nav = h('div', { class: 'nav' }, h('a', { class: 'btn small', href: '#/' }, '返回'), h('span', { class: 'title' }, '加入牌桌'));
-    if (!room.exists) {
-      root.replaceChildren(nav, h('div', { class: 'panel' }, h('h2', {}, '主机还没有开桌'),
+    if (!room && rooms.length) { // several tables: pick one
+      root.replaceChildren(nav, h('div', { class: 'panel' }, h('h2', {}, '选一张牌桌'), tableList(rooms, rooms.length, load)));
+      return;
+    }
+    if (!room || !room.exists) {
+      root.replaceChildren(nav, h('div', { class: 'panel' }, h('h2', {}, roomId ? '这张牌桌已经关闭了' : '主机还没有开桌'),
         h('p', { class: 'muted' }, '请在主机上点“开一桌”，把座位设为“玩家”，然后点下面的按钮刷新。'),
         h('button', { class: 'btn', onclick: load }, '刷新')));
       return;
     }
-    const mine = seatStore.get();
+    const mine = seatStore.get(room.id);
     const nameInput = h('input', { type: 'text', value: nameStore.get(), maxlength: 10, placeholder: '你的昵称' });
     const list = h('div', { class: 'seat-list' });
     room.seats.forEach((s, i) => {
       let action;
-      if (mine && mine.room === room.id && mine.seat === i) action = h('a', { class: 'btn small primary', href: '#/table' }, '回到座位');
+      if (mine && mine.token && mine.seat === i) action = h('a', { class: 'btn small primary', href: `#/table/${room.id}` }, '回到座位');
       else if (s.kind === 'human' && !s.taken) action = h('button', { class: 'btn small primary', onclick: () => join(i, nameInput.value) }, '坐这里');
       else action = h('span', { class: 'dim' }, s.kind === 'ai' ? 'AI' : '已有人');
       list.appendChild(h('div', { class: 'seat-row' },
-        h('span', { class: 'pos' }, ['南', '东', '北', '西'][i]),
+        h('span', { class: 'pos' }, DIRS[i]),
         h('span', { class: 'nm' }, s.kind === 'ai' ? `${s.name}` : (s.taken ? s.name : '空位'), h('span', { class: 'dim' }, i % 2 === 0 ? '  （与南家同队）' : '  （与东家同队）')),
         s.kind === 'human' ? h('span', { class: 'dot' + (s.connected ? ' on' : '') }) : null,
         action));
@@ -215,15 +286,15 @@ async function viewJoin() {
       list,
       h('div', { style: { marginTop: '14px', display: 'flex', gap: '10px' } },
         h('button', { class: 'btn', onclick: load }, '刷新'),
-        h('button', { class: 'btn', onclick: () => { seatStore.set({ room: room.id, seat: -1, token: null }); location.hash = '#/table'; } }, '观战')),
+        h('a', { class: 'btn', href: `#/table/${room.id}/watch` }, '观战')),
     ));
   }
   async function join(seat, name) {
     nameStore.set(name);
     try {
-      const r = await api.post('/api/room/join', { seat, name });
+      const r = await api.post('/api/room/join', { room: room.id, seat, name });
       seatStore.set({ room: r.room, seat: r.seat, token: r.token });
-      location.hash = '#/table';
+      location.hash = `#/table/${r.room}`;
     } catch (e) { toast(e.message, 'err'); load(); }
   }
   load();
@@ -234,11 +305,14 @@ function route() {
   if (cleanup) { try { cleanup(); } catch {} cleanup = null; }
   document.body.classList.remove('in-game');
   const hash = location.hash || '#/';
+  const part = hash.split('/'); // #/table/<room>[/watch], #/join/<room>
   if (hash.startsWith('#/play')) viewSetup();
-  else if (hash.startsWith('#/join')) viewJoin();
+  else if (hash.startsWith('#/join')) viewJoin(part[2] || null);
   else if (hash.startsWith('#/train')) cleanup = mountTrain(app);
-  else if (hash.startsWith('#/table')) { document.body.classList.add('in-game'); cleanup = mountTable(app); }
-  else viewHome();
+  else if (hash.startsWith('#/table')) {
+    document.body.classList.add('in-game');
+    cleanup = mountTable(app, part[2] || seatStore.current(), part[3] === 'watch');
+  } else viewHome();
 }
 window.addEventListener('hashchange', route);
 route();

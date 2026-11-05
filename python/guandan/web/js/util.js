@@ -39,10 +39,39 @@ export function h(tag, attrs = {}, ...kids) {
   return el;
 }
 
+// this device's seats, one per table: {room id: {room, seat, token}}; "current" is the table
+// it used last (old versions kept a single seat under gd_seat)
+const SEATS = 'gd_seats';
+function loadSeats() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SEATS) || 'null');
+    if (v && typeof v === 'object') return v;
+  } catch {}
+  try {
+    const o = JSON.parse(localStorage.getItem('gd_seat') || 'null');
+    if (o && o.room) return { [o.room]: o };
+  } catch {}
+  return {};
+}
 export const seatStore = {
-  get() { try { return JSON.parse(localStorage.getItem('gd_seat') || 'null'); } catch { return null; } },
-  set(v) { try { localStorage.setItem('gd_seat', JSON.stringify(v)); } catch {} },
-  clear() { try { localStorage.removeItem('gd_seat'); } catch {} },
+  get(room) {
+    const id = room || this.current();
+    return (id && loadSeats()[id]) || null;
+  },
+  set(v) {
+    const all = loadSeats();
+    all[v.room] = v;
+    try { localStorage.setItem(SEATS, JSON.stringify(all)); localStorage.setItem('gd_room', v.room); } catch {}
+  },
+  current() {
+    try { return localStorage.getItem('gd_room') || ((JSON.parse(localStorage.getItem('gd_seat') || 'null') || {}).room) || null; } catch { return null; }
+  },
+  keep(ids) { // forget seats of tables that no longer exist
+    const all = loadSeats();
+    let changed = false;
+    for (const k of Object.keys(all)) if (!ids.includes(k)) { delete all[k]; changed = true; }
+    if (changed) try { localStorage.setItem(SEATS, JSON.stringify(all)); } catch {}
+  },
 };
 export const nameStore = {
   get() { try { return localStorage.getItem('gd_name') || ''; } catch { return ''; } },

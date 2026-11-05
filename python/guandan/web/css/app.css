@@ -133,6 +133,25 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .home-actions { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
 .home-actions .btn { font-size: 18px; padding: 0.8em 2.1em; }
 .join-strip { margin: 26px auto 0; max-width: 520px; display: flex; gap: 12px; align-items: center; justify-content: center; padding: 12px 16px; border: 1px dashed var(--line-2); border-radius: 12px; flex-wrap: wrap; }
+/* table list on the home page (several tables at once) */
+.tables { margin: 26px auto 0; max-width: 620px; text-align: left; display: grid; gap: 10px; }
+.tables-head { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; flex-wrap: wrap; font-size: 14px; }
+.tables-head .dim { font-size: 12.5px; }
+.table-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: rgba(0, 0, 0, 0.18); display: grid; gap: 6px; }
+.tc-top { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.tc-line { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; align-items: center; }
+.tc-line .pl { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--text-2); }
+.tc-line .pl.on { border-color: var(--ok); color: var(--text); }
+.tc-line .pl.on::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 5px; vertical-align: middle; }
+.tc-line .pl.ai { color: var(--text-3); }
+.tc-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line-2); white-space: nowrap; }
+.chip.play { color: var(--ok); border-color: rgba(108, 197, 154, 0.55); }
+.chip.wait { color: var(--brass-hi); }
+.chip.pause { color: #ffd9d3; border-color: rgba(226, 90, 76, 0.55); }
+.pause-box { width: min(380px, 90vw); text-align: center; pointer-events: auto; background: rgba(10, 38, 30, 0.97); }
+.pause-box .sub { color: var(--text-2); margin: 6px 0 12px; }
+.pause-box .actions { display: flex; justify-content: center; }
 .home-foot { margin-top: 36px; font-size: 13px; color: var(--text-3); display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
 
 /* ---------- setup ---------- */
