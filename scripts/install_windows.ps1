@@ -85,12 +85,30 @@ try {
     Write-Host "下载 $($best.Url)"
     Invoke-WebRequest $best.Url -OutFile $src
   }
+  # the game must not run while its files are replaced: close it here and open it again afterwards
+  $here = { param($p) $p.ExecutablePath -and $p.ExecutablePath.StartsWith($PSScriptRoot, [System.StringComparison]::OrdinalIgnoreCase) }
+  $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $training = @($procs | Where-Object { $_.CommandLine -like '*guandan.train*' -and (& $here $_) })
+  if ($training.Count -gt 0) { throw '有训练正在进行：请先在训练中心停止训练，再运行安装（更新）' }
+  $game = @($procs | Where-Object { $_.CommandLine -like '*-m guandan serve*' -and (& $here $_) })
+  $restart = $false
+  if ($game.Count -gt 0) {
+    Write-Host '先关闭正在运行的游戏，装完会自动重新打开'
+    $windows = @($procs | Where-Object { $_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*start_windows.bat*' })
+    foreach ($p in $game + $windows) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+    $restart = $true
+  }
   Write-Host "安装 $src"
   uv pip install --python "$py" --reinstall-package guandan-rl "$src" 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { uv pip install --python "$py" --reinstall-package guandan-rl "$src" -i $tuna }
   & $py -m guandan info 2>&1 | ForEach-Object { "$_" } | Out-Host
   if ($LASTEXITCODE -ne 0) { throw '安装验证失败' }
   Write-Host "`nINSTALL_OK  安装完成！双击 start_windows.bat 启动。" -ForegroundColor Green
+  if ($restart) {
+    Write-Host '重新打开游戏…'
+    Start-Process -FilePath (Join-Path $PSScriptRoot 'start_windows.bat') -WorkingDirectory $PSScriptRoot
+  }
 } catch {
   Write-Host "INSTALL_FAILED: $_" -ForegroundColor Red
 }
