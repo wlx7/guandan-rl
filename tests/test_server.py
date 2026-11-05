@@ -151,3 +151,24 @@ def test_permissions(client):
     assert client.post("/api/room/close", json={"room": r["room"]}, headers=host).status_code == 200
     client.post("/api/perm/settings", json={"guest_create": True, "pin": ""}, headers=host)
     assert client.get("/api/me", headers=host).json()["admin"] is False  # clearing the password logs out
+
+
+def test_quick_game_at_ace_is_not_a_match_win():
+    """A quick deal that happens to be at level A stands alone: no "过 A" / match win."""
+    import random
+    from guandan import _core
+    from guandan.server.room import Room
+    rng = random.Random(1)
+    room = Room("real", [{"kind": "ai"}] * 4, hint_model=None, length="quick")
+    for seed in range(200):
+        g = _core.Game(seed, tribute=False)
+        g.set_levels([12, 12], 0, True)
+        while g.phase not in (2, 3):
+            k, key, cards = rng.choice(g.legal_moves())
+            g.apply(k, key, list(cards))
+        if g.last_result()[3]:  # the engine calls it a match win (banker passed A)
+            room.game = g
+            res = room.view(-1)["result"]
+            assert res["match_over"] is False and res["gain"] >= 2
+            return
+    raise AssertionError("no deal where the banker passed A")

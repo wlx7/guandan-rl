@@ -701,7 +701,7 @@ export function mountTable(app, roomId, watch) {
     const fill = () => {
       const s2 = S.s;
       const rr = s2.result || r;
-      const title = rr.match_over ? (weWin ? '我方过 A，赢下整场！' : '对方过 A，赢下整场') : (weWin ? (rr.gain === 3 ? '我方双上！' : '我方赢了这一局') : (rr.gain === 3 ? '对方双上' : '对方赢了这一局'));
+      const title = rr.match_over && s2.length === 'full' ? (weWin ? '我方过 A，赢下整场！' : '对方过 A，赢下整场') : (weWin ? (rr.gain === 3 ? '我方双上！' : '我方赢了这一局') : (rr.gain === 3 ? '对方双上' : '对方赢了这一局'));
       const rows = h('div', { class: 'result-list' });
       rr.order.forEach((p, i) => {
         const place = i < 3 || s2.finished.includes(p) ? PLACE[i] : '末游';

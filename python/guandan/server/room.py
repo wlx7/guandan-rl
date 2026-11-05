@@ -302,6 +302,8 @@ class Room:
             r = g.last_result()
             if r:
                 order, win_team, gain, match_over, before, after, a_reset = r
+                if self.length == "quick":  # every quick deal stands alone: no "过 A", no match to win
+                    match_over, a_reset = False, False
                 st["result"] = {"order": list(order), "win_team": win_team, "gain": gain,
                                 "match_over": match_over, "before": list(before), "after": list(after),
                                 "a_reset": a_reset,
