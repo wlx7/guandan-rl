@@ -600,6 +600,10 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .home-actions .btn { font-size: 15px; padding: 0.5em 1.6em; }
   .tables { margin-top: 12px; }
   .home-foot { margin-top: 14px; }
+  /* finishing badges: smaller, and on the inner side of the right player's avatar so that they
+     stay on screen and do not hide the avatar */
+  .badge { font-size: 11px; padding: 1px 5px; top: -9px; right: -14px; }
+  .seat.right .badge { right: auto; left: -16px; transform: rotate(-10deg); }
   /* AI hints: a compact list over the right of the table (the cards show up selected in your hand) */
   .side-panel { width: min(300px, 46vw); right: max(8px, env(safe-area-inset-right)); }
   .hints { padding: 6px 8px; }

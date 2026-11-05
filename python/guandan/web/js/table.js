@@ -188,6 +188,7 @@ export function mountTable(app, roomId, watch) {
     if (s.status === 'waiting') return renderWaiting();
     renderSeats();
     renderZones();
+    placeZones();
     renderCenter();
     renderPause();
     renderActions();
@@ -312,6 +313,18 @@ export function mountTable(app, roomId, watch) {
       if (showHand && vis.length) kids.push(miniRow(vis, s.level, 'm'));
       el.replaceChildren(...kids);
     }
+  }
+
+  // landscape phones: the left / right plays start right next to that player's chip, measured
+  // (names, card counts and the camera cut-out / safe area in full screen move the chips)
+  function placeZones() {
+    const zl = zoneEls[3], zr = zoneEls[1];
+    if (!compactMQ.matches) { zl.style.left = ''; zr.style.right = ''; return; }
+    const br = board.getBoundingClientRect();
+    const L = seatEls[3].getBoundingClientRect();
+    const R = seatEls[1].getBoundingClientRect();
+    if (L.width) zl.style.left = `${Math.round(L.right - br.left + 8)}px`;
+    if (R.width) zr.style.right = `${Math.round(br.right - R.left + 8)}px`;
   }
 
   function renderZones() {
@@ -972,7 +985,7 @@ export function mountTable(app, roomId, watch) {
     }, 2500);
   };
   reportSize();
-  const onResize = () => { reportSize(); if (S.s && S.s.status === 'playing') { renderActions(); renderHand(); } };
+  const onResize = () => { reportSize(); if (S.s && S.s.status === 'playing') { renderActions(); renderHand(); placeZones(); } };
   window.addEventListener('resize', onResize);
   const onKey = (e) => {
     if (!myTurn() || e.target.tagName === 'INPUT') return;
