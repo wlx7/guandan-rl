@@ -286,7 +286,7 @@ async function viewSetup() {
             : !cfg.hostPlays ? `开桌后用手机扫牌桌上的二维码入座（共 ${humans} 个玩家座位）。`
             : humans > 1 ? `需要另外 ${humans - 1} 位玩家通过局域网加入后才会开始。` : ''),
           warn,
-          h('div', { style: { display: 'flex', justifyContent: 'flex-end', marginTop: '10px' } },
+          h('div', { class: 'start-row', style: { display: 'flex', justifyContent: 'flex-end', marginTop: '10px' } },
             h('button', { class: 'btn primary', disabled: !models.length, onclick: start }, humans === 0 ? '开始观战' : '开桌')),
         ),
       ),

@@ -669,8 +669,11 @@ export function mountTable(app, roomId, watch) {
         h('span', { class: 'd' }, m.desc), h('span', { class: 'v' }, (m.q >= 0 ? '+' : '') + m.q.toFixed(2)),
         m.cards.length ? mini : null, h('div', { class: 'bar' }, bar)));
     });
-    side.style.bottom = `${handWrap.offsetHeight + toolsEl.offsetHeight + 8}px`;
-    box.style.maxHeight = `${Math.max(180, board.offsetHeight - 20)}px`;
+    const below = handWrap.offsetHeight + toolsEl.offsetHeight + 8;
+    side.style.bottom = `${below}px`;
+    // never taller than the space between the top bar and the hand (short phone screens: a
+    // compact list that scrolls)
+    box.style.maxHeight = `${Math.max(72, Math.min(board.offsetHeight + 40, window.innerHeight - below - topbar.offsetHeight - 4))}px`;
     box.style.overflow = 'auto';
     side.replaceChildren(box);
   }
