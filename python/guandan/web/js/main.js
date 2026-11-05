@@ -3,7 +3,7 @@ import { sound } from './sound.js';
 import { mountTable } from './table.js';
 import { mountTrain } from './train.js';
 
-import { api, toast, h, seatStore, nameStore, modal, fillModelSelect } from './util.js';
+import { api, toast, h, seatStore, nameStore, modal, fillModelSelect, getMe, adminToken } from './util.js';
 
 const SEAT_POS = ['下（你）', '右（下家）', '上（对家）', '左（上家）'];
 const app = document.getElementById('app');
@@ -23,16 +23,20 @@ async function viewHome() {
   });
   const joinSlot = h('div');
   const foot = h('div', { class: 'home-foot' });
+  const me = await getMe();
+  const canCreate = me.admin || me.guest_create;
   app.replaceChildren(h('div', { class: 'home' }, h('div', { class: 'home-inner' },
     fan,
     h('h1', { class: 'brand' }, '掼蛋'),
     h('p', { class: 'tagline' }, '纯自对弈强化学习训练的掼蛋 AI，同一 WiFi 下多人联机'),
     h('div', { class: 'home-actions' },
-      h('a', { class: 'btn primary', href: '#/play' }, '开一桌'),
-      h('a', { class: 'btn', href: '#/train' }, '训练中心'),
+      canCreate ? h('a', { class: 'btn primary', href: '#/play' }, '开一桌')
+        : h('button', { class: 'btn primary', title: '房主没有开放其他设备开桌', onclick: () => toast('房主没有开放其他设备开桌，请让房主开桌后扫码加入', 'err') }, '开一桌'),
+      me.admin || me.guest_train ? h('a', { class: 'btn', href: '#/train' }, '训练中心') : null,
     ),
     joinSlot,
     foot,
+    h('div', { class: 'home-perm' }, ...permLinks(me)),
   )));
   let timer = 0;
   let stopped = false;
@@ -61,8 +65,73 @@ async function viewHome() {
   }
 }
 
-// the computer that runs the server manages the tables (pause, close); phones just join
-const IS_HOST = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+// ---------------------------------------------------------------- permissions
+// 房主 (the host computer, or a device logged in with the host password) manages everything;
+// other devices manage only the tables they opened
+function permLinks(me) {
+  const link = (text, fn) => h('a', { href: '#', onclick: (e) => { e.preventDefault(); fn(); } }, text);
+  if (me.admin) {
+    return [h('span', {}, me.local ? '你是房主（运行游戏的电脑）' : '你已用房主密码登录'),
+      link('权限设置', () => permSettings(me)),
+      me.local ? null : link('退出房主', async () => { try { await api.post('/api/perm/logout'); } catch {} adminToken.clear(); route(); })].filter(Boolean);
+  }
+  return [h('span', {}, '你是普通玩家：可以加入、观战' + (me.guest_create ? '，管理自己开的牌桌' : '')),
+    me.pin_set ? link('房主登录', permLogin) : null].filter(Boolean);
+}
+
+function permLogin() {
+  let m;
+  const input = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'off', placeholder: '房主密码', maxlength: 32 });
+  const go = async () => {
+    try {
+      const r = await api.post('/api/perm/login', { pin: input.value });
+      adminToken.set(r.token);
+      m.close();
+      toast('已用房主密码登录，这台设备现在可以管理所有牌桌');
+      route();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  const box = h('div', {}, h('h2', {}, '房主登录'),
+    h('div', { class: 'sub' }, '输入在运行游戏的电脑上设置的房主密码，这台设备就能管理所有牌桌和训练中心。'),
+    h('div', { class: 'field', style: { margin: '12px auto 0', maxWidth: '240px' } }, input),
+    h('div', { class: 'actions' }, h('button', { class: 'btn', onclick: () => m.close() }, '取消'), h('button', { class: 'btn primary', onclick: go }, '登录')));
+  m = modal(box, { onClose: () => {} });
+  setTimeout(() => input.focus(), 50);
+}
+
+function permSettings(me) {
+  let m;
+  const st = { guest_create: me.guest_create, guest_train: me.guest_train };
+  const check = (key, text, sub) => {
+    const cb = h('input', { type: 'checkbox', onchange: (e) => { st[key] = e.target.checked; } });
+    cb.checked = !!st[key];
+    return h('label', { class: 'perm-row' }, cb, h('span', {}, h('b', {}, text), h('span', { class: 'dim' }, sub)));
+  };
+  const pin = h('input', { type: 'password', inputmode: 'numeric', autocomplete: 'new-password', maxlength: 32,
+    placeholder: me.pin_set ? '已设置（留空不改）' : '至少 4 位，不设就只有这台电脑是房主' });
+  const save = async (body) => {
+    try {
+      await api.post('/api/perm/settings', body);
+      m.close();
+      toast('权限设置已保存');
+      route();
+    } catch (e) { toast(e.message, 'err'); }
+  };
+  const box = h('div', { style: { textAlign: 'left' } }, h('h2', { style: { textAlign: 'center' } }, '权限设置'),
+    h('div', { class: 'sub', style: { textAlign: 'center' } }, '运行游戏的这台电脑始终是房主，可以管理所有牌桌、使用训练中心。'),
+    h('div', { class: 'perm-list' },
+      check('guest_create', '其他设备可以开桌', '手机等设备可以自己开一桌，并且只能管理（暂停、结束、关闭）自己开的牌桌'),
+      check('guest_train', '其他设备可以使用训练中心', '关闭时只有房主能开始、停止训练和整理模型')),
+    h('div', { class: 'field', style: { marginTop: '12px' } }, h('label', {}, '房主密码'), pin,
+      h('span', { class: 'hint' }, '其他设备在首页点“房主登录”输入它，就和这台电脑一样是房主。修改或清除密码会让已登录的设备全部退出。')),
+    h('div', { class: 'actions' },
+      me.pin_set ? h('button', { class: 'btn danger', onclick: () => save({ ...st, pin: '' }) }, '清除密码') : null,
+      h('button', { class: 'btn', onclick: () => m.close() }, '取消'),
+      h('button', { class: 'btn primary', onclick: () => save(pin.value ? { ...st, pin: pin.value } : st) }, '保存')));
+  m = modal(box, { onClose: () => {} });
+}
+
 const DIRS = ['南', '东', '北', '西'];
 const LV = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 
@@ -92,7 +161,7 @@ function tableList(rooms, max, refresh) {
       : free ? h('a', { class: 'btn small primary', href: `#/join/${r.id}` }, '加入')
         : null;
     const watch = h('a', { class: 'btn small', href: `#/table/${r.id}/watch` }, '观战');
-    const manage = IS_HOST ? [
+    const manage = r.can_manage ? [
       r.status === 'playing' ? h('button', { class: 'btn small', onclick: async () => {
         try { await api.post('/api/room/pause', { room: r.id, paused: !r.pause_by }); refresh(); } catch (e) { toast(e.message, 'err'); }
       } }, r.pause_by ? '继续' : '暂停') : null,
@@ -129,7 +198,9 @@ async function viewSetup() {
   let models = [];
   let room = null;
   let info = {};
-  try { [models, room, info] = await Promise.all([api.get('/api/models'), api.get('/api/room'), api.get('/api/info')]); } catch (e) { toast(e.message, 'err'); }
+  let me = {};
+  try { [models, room, info, me] = await Promise.all([api.get('/api/models'), api.get('/api/room'), api.get('/api/info'), getMe()]); } catch (e) { toast(e.message, 'err'); }
+  if (!nameStore.get() && !me.admin) cfg.name = '玩家'; // "房主" is the host computer's default name
   const canSearch = !!(info.device && info.device.torch);  // look-ahead search needs PyTorch
   if (models.length) cfg.model = models[0].id;
 

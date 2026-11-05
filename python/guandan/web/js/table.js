@@ -1,6 +1,6 @@
 import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, SUITS, rankOf, arrangeHand, cardCounter, straightFlushes, suitSvg } from './cards.js';
 import { sound } from './sound.js';
-import { api, toast, h, seatStore, modal } from './util.js';
+import { api, toast, h, seatStore, modal, wsAuth } from './util.js';
 
 const PLACE = ['头游', '二游', '三游', '末游'];
 const BOMB_WORD = { 8: '炸弹', 9: '同花顺', 10: '天王炸' };
@@ -66,10 +66,10 @@ export function mountTable(app, roomId, watch) {
   function connect() {
     if (S.closed) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const qs = [];
+    const qs = [wsAuth()];
     if (roomId) qs.push('room=' + encodeURIComponent(roomId));
     if (seat.token) qs.push('token=' + encodeURIComponent(seat.token));
-    const q = qs.length ? '?' + qs.join('&') : '';
+    const q = '?' + qs.join('&');
     const ws = new WebSocket(`${proto}://${location.host}/ws${q}`);
     S.ws = ws;
     ws.onopen = () => { S.retry = 0; };
@@ -256,7 +256,7 @@ export function mountTable(app, roomId, watch) {
           h('div', { class: 'url-big', id: 'lanurl' }, '…'), list),
         h('div', { class: 'qr', id: 'qrbox' })),
       h('div', { style: { marginTop: '14px', display: 'flex', gap: '10px', flexWrap: 'wrap' } },
-        h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai', { room: s.room }).catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始'),
+        S.canManage ? h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai', { room: s.room }).catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始') : null,
         h('button', { class: 'btn small', onclick: () => { location.hash = '#/'; } }, '返回首页')));
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
@@ -358,13 +358,13 @@ export function mountTable(app, roomId, watch) {
 
   function renderPause() {
     const s = S.s;
-    pauseBtn.style.display = s.status === 'playing' && !isPaused() ? '' : 'none';
+    pauseBtn.style.display = s.status === 'playing' && !isPaused() && (you() >= 0 || S.canManage) ? '' : 'none';
     if (!isPaused() || s.phase >= 2) return;
     const box = h('div', { class: 'panel pause-box' },
       h('h2', {}, '牌局已暂停'),
       h('div', { class: 'sub' }, s.pause_by ? `${s.pause_by} 按了暂停，点“继续”从原处接着打。`
         : (s.seats.some((st) => st.kind === 'human') ? '玩家都离开了，他们回来后从原处继续。' : '没人观战时这桌会暂停。')),
-      s.pause_by ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => send({ action: 'resume' }) }, '继续')) : null);
+      s.pause_by && (you() >= 0 || S.canManage) ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => send({ action: 'resume' }) }, '继续')) : null);
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
   }
@@ -923,9 +923,14 @@ export function mountTable(app, roomId, watch) {
     m = modal(box, { onClose: () => {} });
   }
 
-  // players, or the host computer watching, can end the table for good
-  const IS_HOST = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
-  function canEnd() { return you() >= 0 || IS_HOST; }
+  // the host, or the device that opened this table, can end it for good
+  function canEnd() { return !!S.canManage; }
+  function loadPerm() {
+    api.get('/api/room' + (roomId ? '?id=' + encodeURIComponent(roomId) : '')).then((r) => {
+      S.canManage = !!r.can_manage;
+      if (S.s) render();
+    }).catch(() => {});
+  }
   function endTable() {
     const s = S.s;
     const others = s && s.seats.some((st, i) => i !== you() && st.kind === 'human' && st.taken);
@@ -962,6 +967,7 @@ export function mountTable(app, roomId, watch) {
   const onHide = () => goAway();
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('pagehide', onHide);
+  loadPerm();
   connect();
 
   return () => {

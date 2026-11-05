@@ -1,12 +1,49 @@
 // Shared helpers
+
+// this browser's id (tables it opens belong to it) and, after "房主登录", its host token
+function randomId() {
+  try {
+    const a = new Uint8Array(12);
+    crypto.getRandomValues(a); // works on plain http too (crypto.randomUUID does not)
+    return [...a].map((x) => x.toString(16).padStart(2, '0')).join('');
+  } catch { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+}
+export const device = (() => {
+  try {
+    let d = localStorage.getItem('gd_device');
+    if (!d) { d = randomId(); localStorage.setItem('gd_device', d); }
+    return d;
+  } catch { return randomId(); }
+})();
+export const adminToken = {
+  get() { try { return localStorage.getItem('gd_admin') || ''; } catch { return ''; } },
+  set(v) { try { localStorage.setItem('gd_admin', v); } catch {} },
+  clear() { try { localStorage.removeItem('gd_admin'); } catch {} },
+};
+function authHeaders(extra = {}) {
+  const hd = { 'X-Guandan-Device': device, ...extra };
+  const t = adminToken.get();
+  if (t) hd['X-Guandan-Admin'] = t;
+  return hd;
+}
+// the same for the WebSocket (browsers cannot set its headers)
+export function wsAuth() {
+  const t = adminToken.get();
+  return 'device=' + encodeURIComponent(device) + (t ? '&admin=' + encodeURIComponent(t) : '');
+}
+// {admin, local, pin_set, guest_create, guest_train}
+export async function getMe() {
+  try { return await api.get('/api/me'); } catch { return { admin: false, local: false, pin_set: false, guest_create: true, guest_train: false }; }
+}
+
 export const api = {
   async get(url) {
-    const r = await fetch(url, { cache: 'no-store' });
+    const r = await fetch(url, { cache: 'no-store', headers: authHeaders() });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     return r.json();
   },
   async post(url, body = {}) {
-    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(url, { method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
     return r.json();
   },

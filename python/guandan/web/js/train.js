@@ -1,4 +1,4 @@
-import { api, toast, h, modal, fillModelSelect, modelLabel } from './util.js';
+import { api, toast, h, modal, fillModelSelect, modelLabel, getMe } from './util.js';
 import { LineChart, SERIES_COLORS, fmtFrames } from './chart.js';
 
 const OPP = [
@@ -31,6 +31,14 @@ export function mountTrain(app) {
   app.replaceChildren(root);
 
   async function init() {
+    const me = await getMe();
+    if (!(me.admin || me.guest_train)) {
+      left.replaceChildren(h('h2', {}, '训练中心只有房主可以使用'),
+        h('p', {}, '在运行游戏的那台电脑上打开训练中心；或者在首页点“房主登录”，输入房主密码后这台设备也能使用。'),
+        h('a', { class: 'btn', href: '#/' }, '返回首页'));
+      right.replaceChildren();
+      return;
+    }
     try {
       [st.info, st.models, st.runs] = await Promise.all([api.get('/api/info'), api.get('/api/models'), api.get('/api/train/runs')]);
     } catch (e) { toast(e.message, 'err'); return; }

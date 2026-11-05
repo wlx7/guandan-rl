@@ -6,13 +6,14 @@ import os
 import socket
 import time
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
 from ..paths import list_models, resolve_model, default_model, home, set_model_entry
 from . import trainer
+from . import perm
 from ..proc import resource_limits
 from ..scoring import PRESETS as scoring_presets
 from .room import Room
@@ -64,6 +65,35 @@ def lan_ips():
     return sorted(ips, key=score)
 
 
+_own = {"t": 0.0, "ips": ()}
+
+
+def own_ips():
+    """This computer's own addresses: opening the LAN address on the host still counts as the host."""
+    if time.time() - _own["t"] > 60:
+        _own["ips"], _own["t"] = tuple(lan_ips()), time.time()
+    return _own["ips"]
+
+
+def ident(conn) -> dict:
+    """Who is asking (an HTTP request or a WebSocket): host or guest, and the browser's device id."""
+    host = conn.client.host if conn.client else None
+    token = conn.headers.get("x-guandan-admin") or conn.query_params.get("admin")
+    device = (conn.headers.get("x-guandan-device") or conn.query_params.get("device") or "")[:64]
+    return {"admin": perm.is_admin(host, token, own_ips()), "local": perm.is_local(host, own_ips()),
+            "device": device, "host": host, "token": token}
+
+
+def need_admin(request: Request, what: str):
+    if not ident(request)["admin"]:
+        raise HTTPException(403, f"只有房主可以{what}")
+
+
+def need_train(request: Request):
+    if not (ident(request)["admin"] or perm.load()["guest_train"]):
+        raise HTTPException(403, "训练中心只有房主可以使用")
+
+
 def device_info():
     info = {"cuda": False, "gpu": None, "cpu_count": os.cpu_count(), "torch": None}
     try:
@@ -81,6 +111,41 @@ def device_info():
 @app.get("/")
 def index():
     return FileResponse(os.path.join(WEB_DIR, "index.html"))
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    i = ident(request)
+    st = perm.load()
+    return {"admin": i["admin"], "local": i["local"], "pin_set": bool(st["pin_hash"]),
+            "guest_create": st["guest_create"], "guest_train": st["guest_train"]}
+
+
+@app.post("/api/perm/login")
+def api_perm_login(body: dict, request: Request):
+    try:
+        token = perm.login(str(body.get("pin") or ""), request.client.host if request.client else "?")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"token": token}
+
+
+@app.post("/api/perm/logout")
+def api_perm_logout(request: Request):
+    perm.logout(ident(request)["token"])
+    return {"ok": True}
+
+
+@app.post("/api/perm/settings")
+def api_perm_settings(body: dict, request: Request):
+    need_admin(request, "修改权限设置")
+    perm.update(body.get("guest_create"), body.get("guest_train"))
+    if "pin" in body:
+        pin = str(body.get("pin") or "").strip()
+        if pin and len(pin) < 4:
+            raise HTTPException(400, "房主密码至少 4 位")
+        perm.set_pin(pin)
+    return api_me(request)
 
 
 @app.get("/api/info")
@@ -128,8 +193,9 @@ def api_models(all: bool = False):
 
 
 @app.post("/api/models/manage")
-def api_models_manage(body: dict):
+def api_models_manage(body: dict, request: Request):
     """Rename and/or hide a model-list entry: {"key": "runs/<name>" | "models/<file>", "label"?, "hidden"?}."""
+    need_admin(request, "整理模型列表")
     key = str(body.get("key") or "")
     if not (key.startswith("runs/") or key.startswith("models/") or key.startswith("builtin/")) or ".." in key:
         raise HTTPException(400, "无效的模型")
@@ -146,7 +212,8 @@ def api_runs():
 
 
 @app.post("/api/train/start")
-def api_train_start(opts: dict):
+def api_train_start(opts: dict, request: Request):
+    need_train(request)
     if opts.get("base"):
         p = resolve_model(opts["base"])
         if not p:
@@ -160,7 +227,8 @@ def api_train_start(opts: dict):
 
 
 @app.post("/api/train/stop")
-def api_train_stop(body: dict):
+def api_train_stop(body: dict, request: Request):
+    need_train(request)
     try:
         if body.get("force"):
             trainer.force_stop(body["name"])
@@ -182,7 +250,8 @@ def api_train_log(name: str):
 
 
 @app.post("/api/train/export")
-def api_train_export(body: dict):
+def api_train_export(body: dict, request: Request):
+    need_train(request)
     try:
         p = trainer.export_model(body["run"], body["file"], body.get("as") or body["run"])
     except ValueError as e:
@@ -216,21 +285,31 @@ def get_room(room_id: str | None = None, token: str | None = None) -> Room | Non
     return rs[-1] if rs else None
 
 
+def need_manage(r: Room, request: Request):
+    """The host, or the device that opened this table."""
+    if not r.can_manage(ident(request)):
+        raise HTTPException(403, "只有房主或开这张桌的人可以管理这张牌桌")
+
+
 @app.get("/api/rooms")
-def api_rooms():
-    return {"rooms": [r.summary() for r in rooms()], "max": MAX_ROOMS}
+def api_rooms(request: Request):
+    i = ident(request)
+    return {"rooms": [dict(r.summary(), can_manage=r.can_manage(i)) for r in rooms()], "max": MAX_ROOMS}
 
 
 @app.get("/api/room")
-def api_room(id: str = ""):
+def api_room(request: Request, id: str = ""):
     r = get_room(id or None)
     if r is None:
         return {"exists": False}
-    return dict(r.public_info(), exists=True)
+    return dict(r.public_info(), exists=True, can_manage=r.can_manage(ident(request)))
 
 
 @app.post("/api/room/create")
-def api_room_create(body: dict):
+def api_room_create(body: dict, request: Request):
+    me = ident(request)
+    if not (me["admin"] or perm.load()["guest_create"]):
+        raise HTTPException(403, "房主没有开放其他设备开桌，请让房主开桌后扫码加入")
     mode = body.get("mode", "teach")
     seats_in = body.get("seats") or []
     model_default = resolve_model(body.get("model") or "") or default_model()
@@ -251,6 +330,7 @@ def api_room_create(body: dict):
                 length="quick" if body.get("length") == "quick" else "full",
                 think="deep" if body.get("think") == "deep" else "fast",
                 scoring_name=body.get("scoring") or "none")
+    room.owner = me["device"]
     STATE["rooms"][room.id] = room
     token = None
     seat = None
@@ -276,10 +356,11 @@ def api_room_join(body: dict):
 
 
 @app.post("/api/room/fill_ai")
-async def api_room_fill_ai(body: dict | None = None):
+async def api_room_fill_ai(request: Request, body: dict | None = None):
     r = get_room((body or {}).get("room"))
     if r is None or r.status != "waiting":
         raise HTTPException(400, "牌桌已经开始或不存在")
+    need_manage(r, request)
     r.fill_ai()
     r.maybe_start()
     await r.broadcast()
@@ -287,20 +368,25 @@ async def api_room_fill_ai(body: dict | None = None):
 
 
 @app.post("/api/room/pause")
-async def api_room_pause(body: dict):
+async def api_room_pause(body: dict, request: Request):
     """Pause or resume a table from the table list."""
     r = get_room(body.get("room"))
     if r is None:
         raise HTTPException(404, "这张牌桌不存在或已经关闭")
+    need_manage(r, request)
     r.set_pause(bool(body.get("paused")), "房主")
     await r.broadcast()
     return {"ok": True}
 
 
 @app.post("/api/room/close")
-async def api_room_close(body: dict | None = None):
+async def api_room_close(request: Request, body: dict | None = None):
     rid = (body or {}).get("room")
     r = get_room(rid) if rid else None
+    if r is not None:
+        need_manage(r, request)
+    elif not rid:
+        need_admin(request, "关闭所有牌桌")
     targets = [r] if r is not None else ([] if rid else rooms())  # no id: close all (old clients)
     for x in targets:
         await x.end("房主关闭了这张牌桌")
@@ -318,6 +404,7 @@ async def ws_endpoint(ws: WebSocket):
         await ws.send_json({"type": "error", "message": "这张牌桌已经关闭了" if (rid or token) else "当前没有牌桌", "fatal": True})
         await ws.close()
         return
+    r.idents[ws] = ident(ws)
     seat = r.seat_of_token(token) if token else None
     if seat is None:
         if token:
@@ -342,6 +429,7 @@ async def ws_endpoint(ws: WebSocket):
     except Exception:
         pass
     finally:
+        r.idents.pop(ws, None)
         if seat >= 0:
             r.seats[seat].connections.discard(ws)
         else:

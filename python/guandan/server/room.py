@@ -90,6 +90,8 @@ class Room:
         self.review: dict | None = None
         self.paused = False  # play is stopped (see can_run) and goes on from the same spot later
         self.manual_pause: str | None = None  # name of who pressed "暂停", None when not paused by hand
+        self.owner = ""  # device id of the browser that opened the table (may manage it like the host)
+        self.idents: dict = {}  # websocket -> who it is (see app.ident)
         self.last_active = time.time()
 
     def new_game(self):
@@ -111,6 +113,12 @@ class Room:
         if humans:
             return any(s.connected for s in humans)
         return bool(self.spectators)
+
+    def can_manage(self, ident: dict | None) -> bool:
+        """The host, or the device that opened this table, may pause / end / close it."""
+        if not ident:
+            return False
+        return bool(ident.get("admin")) or bool(self.owner and ident.get("device") == self.owner)
 
     def can_run(self):
         """Play goes on unless someone pressed pause or nobody is at the table."""
@@ -605,16 +613,18 @@ class Room:
             await self.send(ws, {"type": "hints", "hints": hs, "seq": self.seq})
             return
         if act == "end":
-            # players at the table, or the host computer watching it, may end the table
-            client = getattr(ws, "client", None)
-            local = bool(client and client.host in ("127.0.0.1", "::1", "localhost"))
-            if seat < 0 and not local:
-                await self.send(ws, {"type": "error", "message": "观战时不能结束牌局"})
+            # the host, or the device that opened this table
+            if not self.can_manage(self.idents.get(ws)):
+                await self.send(ws, {"type": "error", "message": "只有房主或开这张桌的人可以结束牌局"})
                 return
             who = self.seats[seat].name if seat >= 0 else "房主"
             await self.end(f"{who} 结束了这张牌桌")
             return
         if act in ("pause", "resume"):
+            # players at the table may pause (play and stop any time); watchers only if they manage it
+            if seat < 0 and not self.can_manage(self.idents.get(ws)):
+                await self.send(ws, {"type": "error", "message": "观战时不能暂停牌局"})
+                return
             who = self.seats[seat].name if seat >= 0 else "房主"
             self.set_pause(act == "pause", who)
             await self.broadcast()

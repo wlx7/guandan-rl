@@ -16,6 +16,7 @@ def client():
     from fastapi.testclient import TestClient
     from guandan.server.app import app
     with TestClient(app) as c:
+        c.headers.update({"X-Guandan-Device": "dev-test"})  # this browser opens the tables below
         yield c
 
 
@@ -111,7 +112,7 @@ def test_several_tables_pause_and_close(client):
 
 def test_player_ends_the_table(client):
     r = client.post("/api/room/create", json={"mode": "teach", "length": "quick", "model": "models/test.pt", "ai_speed": 5}).json()
-    with client.websocket_connect(f"/ws?token={r['token']}") as ws:
+    with client.websocket_connect(f"/ws?token={r['token']}&device=dev-test") as ws:
         _state(ws, lambda m: m["status"] == "playing")
         ws.send_json({"action": "end"})
         for _ in range(50):
@@ -120,3 +121,33 @@ def test_player_ends_the_table(client):
                 break
         assert m["type"] == "closed" and "结束" in m["message"]
     assert r["room"] not in [x["id"] for x in client.get("/api/rooms").json()["rooms"]]
+
+
+def test_permissions(client):
+    from guandan.server import perm
+    me = client.get("/api/me").json()
+    assert me["admin"] is False  # the test client is not the host computer
+    r = client.post("/api/room/create", json={"mode": "real", "length": "quick", "model": "models/test.pt",
+                                              "seats": [{"kind": "ai"}] * 4}).json()
+    other = {"X-Guandan-Device": "someone-else"}
+    # another device may not pause or close this table, the device that opened it may
+    assert client.post("/api/room/pause", json={"room": r["room"], "paused": True}, headers=other).status_code == 403
+    assert client.post("/api/room/close", json={"room": r["room"]}, headers=other).status_code == 403
+    listed = {x["id"]: x for x in client.get("/api/rooms", headers=other).json()["rooms"]}
+    assert listed[r["room"]]["can_manage"] is False
+    assert {x["id"]: x for x in client.get("/api/rooms").json()["rooms"]}[r["room"]]["can_manage"] is True
+    # guests: no training center, no model management, no settings
+    assert client.post("/api/train/stop", json={"name": "x"}).status_code == 403
+    assert client.post("/api/models/manage", json={"key": "models/test.pt", "label": "x"}).status_code == 403
+    assert client.post("/api/perm/settings", json={"guest_create": False}).status_code == 403
+    # the host password turns a device into the host
+    perm.set_pin("2468")
+    assert client.post("/api/perm/login", json={"pin": "1111"}).status_code == 400
+    token = client.post("/api/perm/login", json={"pin": "2468"}).json()["token"]
+    host = {"X-Guandan-Device": "someone-else", "X-Guandan-Admin": token}
+    assert client.get("/api/me", headers=host).json()["admin"] is True
+    assert client.post("/api/perm/settings", json={"guest_create": False}, headers=host).status_code == 200
+    assert client.post("/api/room/create", json={"mode": "teach", "model": "models/test.pt"}).status_code == 403
+    assert client.post("/api/room/close", json={"room": r["room"]}, headers=host).status_code == 200
+    client.post("/api/perm/settings", json={"guest_create": True, "pin": ""}, headers=host)
+    assert client.get("/api/me", headers=host).json()["admin"] is False  # clearing the password logs out
