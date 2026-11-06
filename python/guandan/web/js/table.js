@@ -1,6 +1,7 @@
 import { cardEl, columns, withIds, sortCards, miniRow, cardName, RANKS, SUITS, rankOf, arrangeHand, cardCounter, straightFlushes, suitSvg } from './cards.js';
 import { sound } from './sound.js';
 import { api, toast, h, seatStore, modal, wsAuth } from './util.js';
+import { T, tr, isEn } from './i18n.js';
 
 const PLACE = ['头游', '二游', '三游', '末游'];
 const BOMB_WORD = { 8: '炸弹', 9: '同花顺', 10: '天王炸' };
@@ -28,17 +29,17 @@ export function mountTable(app, roomId, watch) {
   };
 
   // ------------------------------------------------------------ skeleton
-  const backBtn = h('button', { class: 'btn small icon', title: '离开牌桌', 'aria-label': '离开牌桌', onclick: leave }, '离开');
+  const backBtn = h('button', { class: 'btn small icon', title: T('离开牌桌'), 'aria-label': T('离开牌桌'), onclick: leave }, T('离开'));
   const soundLabel = () => (sound.enabled ? '♪' : '♪̸');
-  const soundBtn = h('button', { class: 'btn small icon' + (sound.enabled ? '' : ' muted'), title: '音效开关', 'aria-label': '音效开关', onclick: () => { sound.toggle(); soundBtn.textContent = soundLabel(); soundBtn.classList.toggle('muted', !sound.enabled); } }, soundLabel());
+  const soundBtn = h('button', { class: 'btn small icon' + (sound.enabled ? '' : ' muted'), title: T('音效开关'), 'aria-label': T('音效开关'), onclick: () => { sound.toggle(); soundBtn.textContent = soundLabel(); soundBtn.classList.toggle('muted', !sound.enabled); } }, soundLabel());
   const lvBox = h('div', { class: 'lvbox' });
   const meta = h('div', { class: 'meta' });
-  const helpBtn = h('button', { class: 'btn small icon', title: '规则与操作', 'aria-label': '规则与操作', onclick: showHelp }, '?');
-  const pauseBtn = h('button', { class: 'btn small icon', title: '暂停', 'aria-label': '暂停牌局', onclick: () => send({ action: 'pause' }) }, '⏸');
+  const helpBtn = h('button', { class: 'btn small icon', title: T('规则与操作'), 'aria-label': T('规则与操作'), onclick: showHelp }, '?');
+  const pauseBtn = h('button', { class: 'btn small icon', title: T('暂停'), 'aria-label': T('暂停牌局'), onclick: () => send({ action: 'pause' }) }, '⏸');
   // full screen hides the phone browser's address bar (more room for the table)
   // the Android app is fullscreen already (its WebView has no fullscreen API)
   const canFull = !/GuandanApp/.test(navigator.userAgent) && !!(document.documentElement.requestFullscreen || document.documentElement.webkitRequestFullscreen);
-  const fullBtn = canFull ? h('button', { class: 'btn small icon', title: '全屏', 'aria-label': '全屏', onclick: toggleFull }, '⛶') : null;
+  const fullBtn = canFull ? h('button', { class: 'btn small icon', title: T('全屏'), 'aria-label': T('全屏'), onclick: toggleFull }, '⛶') : null;
   function toggleFull() {
     const d = document;
     if (d.fullscreenElement || d.webkitFullscreenElement) {
@@ -51,7 +52,7 @@ export function mountTable(app, roomId, watch) {
       try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}); } catch {}
     }).catch(() => {});
   }
-  const counterEl = h('div', { class: 'counter', title: '记牌器：其他三家手里还剩的牌（不含已出的牌和你的手牌）' });
+  const counterEl = h('div', { class: 'counter', title: T('记牌器：其他三家手里还剩的牌（不含已出的牌和你的手牌）') });
   const topbar = h('div', { class: 'topbar' }, backBtn, h('div', { class: 'grow' }, lvBox), meta, pauseBtn, fullBtn, helpBtn, soundBtn, counterEl);
   const board = h('div', { class: 'board' });
   const seatEls = DIR.map((d) => h('div', { class: `seat ${d}` }));
@@ -85,13 +86,13 @@ export function mountTable(app, roomId, watch) {
     ws.onclose = () => {
       if (S.closed || S.away) return;
       S.retry++;
-      if (S.retry === 2) toast('连接中断，正在重连…', 'err');
+      if (S.retry === 2) toast(T('连接中断，正在重连…'), 'err');
       setTimeout(connect, Math.min(4000, 500 * S.retry));
     };
   }
   function send(obj) {
     if (S.ws && S.ws.readyState === 1) S.ws.send(JSON.stringify(obj));
-    else toast('未连接到主机', 'err');
+    else toast(T('未连接到主机'), 'err');
   }
 
   function onMessage(m) {
@@ -99,7 +100,7 @@ export function mountTable(app, roomId, watch) {
     if (m.type === 'error') {
       S.busy = false;
       renderActions();
-      toast(m.message, 'err');
+      toast(tr(m.message), 'err');
       if (m.fatal) {
         S.closed = true;
         setTimeout(() => { location.hash = '#/'; }, 1500);
@@ -109,7 +110,7 @@ export function mountTable(app, roomId, watch) {
     if (m.type === 'closed') { // the table was ended (by a player or the host)
       S.closed = true;
       if (S.modal) S.modal.close();
-      toast(m.message || '牌桌已关闭');
+      toast(m.message ? tr(m.message) : T('牌桌已关闭'));
       setTimeout(() => { location.hash = '#/'; }, S.ending ? 200 : 1500);
       return;
     }
@@ -122,7 +123,7 @@ export function mountTable(app, roomId, watch) {
   const base = () => (you() >= 0 ? you() : 0);
   const relOf = (p) => (p - base() + 4) % 4;
   const ourTeam = () => base() % 2;
-  const nameOf = (p) => (S.s && S.s.seats[p] ? S.s.seats[p].name || `玩家${p + 1}` : '');
+  const nameOf = (p) => (S.s && S.s.seats[p] ? (S.s.seats[p].name ? tr(S.s.seats[p].name) : T('玩家{n}', { n: p + 1 })) : '');
   const isPaused = () => !!(S.s && (S.s.paused || S.s.pause_by));
   const myTurn = () => S.s && you() >= 0 && !isPaused() && S.s.current === you() && S.s.status === 'playing' && (S.s.phase === 0 || S.s.phase === 1);
   const myHand = () => (S.s ? (you() >= 0 ? S.s.hand || [] : S.s.hands['0'] || []) : []);
@@ -157,7 +158,7 @@ export function mountTable(app, roomId, watch) {
       S.held = keep;
       clearTimeout(S.heldTimer);
       S.heldTimer = setTimeout(() => { S.held = null; renderZones(); }, 1100);
-      if (ev.jiefeng) toast(`接风：${nameOf(ev.leader)} 获得出牌权`);
+      if (ev.jiefeng) toast(T('接风：{name} 获得出牌权', { name: nameOf(ev.leader) }));
     } else if (isNew && ev.type === 'play') {
       S.held = null;
     }
@@ -208,7 +209,7 @@ export function mountTable(app, roomId, watch) {
     if (!on) { counterEl.replaceChildren(); return; }
     const cells = cardCounter(myHand(), s.played, s.level).map((c) => h('div', {
       class: 'cc' + (c.level ? ' lv' : '') + (c.r >= 13 ? ' jk' : '') + (c.r === 14 ? ' big' : '') + (c.left === 0 ? ' zero' : ''),
-    }, h('span', { class: 'l' }, c.label), h('b', {}, String(c.left))));
+    }, h('span', { class: 'l' }, T(c.label)), h('b', {}, String(c.left))));
     counterEl.replaceChildren(...cells);
   }
 
@@ -218,26 +219,27 @@ export function mountTable(app, roomId, watch) {
     const lv = (t) => RANKS[s.team_level[t]];
     const prevLevel = S.prev ? S.prev.level : s.level;
     const plaque = h('div', { class: 'plaque' + (prevLevel !== s.level ? ' pulse' : '') },
-      h('div', { class: 'big' }, '打 ', h('span', { class: 'n' }, RANKS[s.level])),
-      h('div', { class: 'sub' }, `红桃${RANKS[s.level]} 逢人配`));
+      h('div', { class: 'big' }, T('打 '), h('span', { class: 'n' }, RANKS[s.level])),
+      h('div', { class: 'sub' }, T('红桃{r} 逢人配', { r: RANKS[s.level] })));
     const multBadge = s.scoring && s.scoring !== 'none'
-      ? h('div', { class: 'mult' + (S.prev && S.prev.multiplier !== s.multiplier && s.multiplier > 1 ? ' pulse' : ''), title: '本局倍数' }, h('span', {}, '倍数'), h('b', {}, `×${s.multiplier}`))
+      ? h('div', { class: 'mult' + (S.prev && S.prev.multiplier !== s.multiplier && s.multiplier > 1 ? ' pulse' : ''), title: T('本局倍数') }, h('span', {}, T('倍数')), h('b', {}, `×${s.multiplier}`))
       : null;
     if (s.length === 'quick') {
       lvBox.replaceChildren(...[plaque, multBadge].filter(Boolean));
     } else {
       lvBox.replaceChildren(
-        h('div', { class: 'teamlv ours' + (s.banker === ot ? ' banker' : '') }, h('span', {}, '我方'), h('b', {}, lv(ot))),
+        h('div', { class: 'teamlv ours' + (s.banker === ot ? ' banker' : '') }, h('span', {}, T('我方')), h('b', {}, lv(ot))),
         plaque,
-        h('div', { class: 'teamlv' + (s.banker === 1 - ot ? ' banker' : '') }, h('span', {}, '对方'), h('b', {}, lv(1 - ot))),
+        h('div', { class: 'teamlv' + (s.banker === 1 - ot ? ' banker' : '') }, h('span', {}, T('对方')), h('b', {}, lv(1 - ot))),
         ...(multBadge ? [multBadge] : []));
     }
-    const modeName = s.mode === 'teach' ? '教学' : '实战';
+    const quick = s.length === 'quick';
+    const modeName = s.mode === 'teach' ? (quick ? T('教学快速') : T('教学竞技')) : (quick ? T('实战快速') : T('实战竞技'));
     const scored = s.scoring && s.scoring !== 'none';
-    const line2 = s.length === 'quick'
-      ? `积分 ${s.points[ot]} : ${s.points[1 - ot]}`
-      : `第 ${s.match_no} 场  胜场 ${s.score[ot]} : ${s.score[1 - ot]}` + (scored ? `  总分 ${s.totals[ot]} : ${s.totals[1 - ot]}` : '');
-    meta.replaceChildren(h('div', {}, h('b', {}, `${modeName}${s.length === 'quick' ? '快速' : '竞技'}`), `  第 ${s.round_no} 局`), h('div', {}, line2 + (s.think === 'deep' ? '  AI 推演搜索' : '')));
+    const line2 = quick
+      ? T('积分 {a} : {b}', { a: s.points[ot], b: s.points[1 - ot] })
+      : T('第 {n} 场  胜场 {a} : {b}', { n: s.match_no, a: s.score[ot], b: s.score[1 - ot] }) + (scored ? T('  总分 {a} : {b}', { a: s.totals[ot], b: s.totals[1 - ot] }) : '');
+    meta.replaceChildren(h('div', {}, h('b', {}, modeName), T('  第 {n} 局', { n: s.round_no })), h('div', {}, line2 + (s.think === 'deep' ? T('  AI 推演搜索') : '')));
   }
 
   function renderWaiting() {
@@ -252,19 +254,19 @@ export function mountTable(app, roomId, watch) {
     const list = h('div', { class: 'seat-list' });
     s.seats.forEach((st, i) => {
       list.appendChild(h('div', { class: 'seat-row' },
-        h('span', { class: 'pos' }, ['南', '东', '北', '西'][i]),
-        h('span', { class: 'nm' }, st.kind === 'ai' ? st.name : (st.connected ? st.name : '等待加入…')),
+        h('span', { class: 'pos' }, T(['南', '东', '北', '西'][i])),
+        h('span', { class: 'nm' }, st.kind === 'ai' ? tr(st.name) : (st.connected ? tr(st.name) : T('等待加入…'))),
         h('span', { class: 'dot' + (st.connected ? ' on' : '') })));
     });
     const box = h('div', { class: 'panel', style: { width: 'min(640px, 94vw)', pointerEvents: 'auto', textAlign: 'left' } },
-      h('h2', {}, '等待玩家加入'),
+      h('h2', {}, T('等待玩家加入')),
       h('div', { class: 'wait-grid' },
-        h('div', {}, h('p', { class: 'muted', style: { marginTop: 0 } }, '让朋友连接同一个 WiFi，用手机或电脑浏览器打开：'),
+        h('div', {}, h('p', { class: 'muted', style: { marginTop: 0 } }, T('让朋友连接同一个 WiFi，用手机或电脑浏览器打开：')),
           h('div', { class: 'url-big', id: 'lanurl' }, '…'), list),
         h('div', { class: 'qr', id: 'qrbox' })),
       h('div', { style: { marginTop: '14px', display: 'flex', gap: '10px', flexWrap: 'wrap' } },
-        S.canManage ? h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai', { room: s.room }).catch((e) => toast(e.message, 'err')) }, '空位由 AI 补上，直接开始') : null,
-        h('button', { class: 'btn small', onclick: () => { location.hash = '#/'; } }, '返回首页')));
+        S.canManage ? h('button', { class: 'btn small', onclick: () => api.post('/api/room/fill_ai', { room: s.room }).catch((e) => toast(tr(e.message), 'err')) }, T('空位由 AI 补上，直接开始')) : null,
+        h('button', { class: 'btn small', onclick: () => { location.hash = '#/'; } }, T('返回首页'))));
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
     api.get('/api/info').then((info) => {
@@ -273,7 +275,7 @@ export function mountTable(app, roomId, watch) {
       const el = document.getElementById('lanurl');
       if (el) el.textContent = u;
       const q = document.getElementById('qrbox');
-      if (q) q.replaceChildren(h('img', { src: '/api/qr?text=' + encodeURIComponent(u), alt: '扫码加入' }));
+      if (q) q.replaceChildren(h('img', { src: '/api/qr?text=' + encodeURIComponent(u), alt: T('扫码加入') }));
     }).catch(() => {});
   }
 
@@ -296,7 +298,7 @@ export function mountTable(app, roomId, watch) {
       const isTurn = s.current === p && (s.phase === 0 || s.phase === 1);
       el.className = `seat ${DIR[r]} ${p % 2 === ourTeam() ? 'team-ours' : 'team-theirs'}${isTurn ? ' turn' : ''}${st.kind === 'ai' ? ' is-ai' : ''}`;
       el.dataset.p = p;
-      const avText = st.kind === 'ai' ? (st.name || 'AI').slice(-1) : (st.name || '?').slice(0, 1);
+      const avText = st.kind === 'ai' ? T((st.name || 'AI').slice(-1)) : (tr(st.name) || '?').slice(0, 1);
       const av = h('div', { class: 'avatar' + (st.kind === 'ai' ? ' ai' : '') }, avText);
       if (isTurn && s.deadline) av.appendChild(ringSvg());
       // the finishing badge stamps in once; later renders keep it still
@@ -304,12 +306,12 @@ export function mountTable(app, roomId, watch) {
       S.badges = S.badges || new Set();
       const justDone = place >= 0 && !S.badges.has(bkey);
       if (place >= 0) S.badges.add(bkey);
-      if (place >= 0) av.appendChild(h('span', { class: 'badge' + (place === 0 ? ' p1' : '') + (justDone ? ' new' : '') }, PLACE[place]));
+      if (place >= 0) av.appendChild(h('span', { class: 'badge' + (place === 0 ? ' p1' : '') + (justDone ? ' new' : '') }, T(PLACE[place])));
       const cnt = s.counts[p];
       const info = h('div', { class: 'info' },
-        h('div', { class: 'nm', title: st.name }, st.name + (r === 0 && you() >= 0 && st.name !== '我' ? '（你）' : '')),
+        h('div', { class: 'nm', title: tr(st.name) }, tr(st.name) + (r === 0 && you() >= 0 && st.name !== '我' ? T('（你）') : '')),
         r === 0 ? null : h('div', { class: 'count' + (cnt > 0 && cnt <= 6 ? ' low' : '') }, h('i', { class: 'cb' }), String(cnt)),
-        st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, s.paused || s.status !== 'playing' ? '离线' : '离线 · AI 托管') : null);
+        st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, s.paused || s.status !== 'playing' ? T('离线') : T('离线 · AI 托管')) : null);
       const kids = [av, info];
       const vis = s.hands[String(p)];
       const showHand = vis && r !== 0 && (s.mode !== 'teach' || S.reveal || you() < 0);
@@ -353,10 +355,10 @@ export function mountTable(app, roomId, watch) {
         // keep my zone visible but small when it's my turn
       }
       if (!t) { z.replaceChildren(); continue; }
-      if (t.pass_) { z.replaceChildren(h('div', { class: 'pass-bubble' }, '不出')); continue; }
+      if (t.pass_) { z.replaceChildren(h('div', { class: 'pass-bubble' }, T('不出'))); continue; }
       const row = h('div', { class: 'cards' });
       for (const c of sortCards(t.cards, s.level)) row.appendChild(cardEl(c, { level: s.level, size: 'p' }));
-      z.replaceChildren(row, h('div', { class: 'desc' }, t.desc));
+      z.replaceChildren(row, h('div', { class: 'desc' }, tr(t.desc)));
     }
   }
 
@@ -368,18 +370,18 @@ export function mountTable(app, roomId, watch) {
       const pr = s.pending_returns[0];
       if (pr) {
         const [recv, payer] = pr;
-        parts.push(recv === you() ? `请选一张 10 或以下的牌还给 ${nameOf(payer)}` : `等待 ${nameOf(recv)} 还贡…`);
+        parts.push(recv === you() ? T('请选一张 10 或以下的牌还给 {name}', { name: nameOf(payer) }) : T('等待 {name} 还贡…', { name: nameOf(recv) }));
       }
     }
     const trib = s.tribute || [];
     const showTrib = trib.length && (s.phase === 0 || (s.phase === 1 && (s.trick && Object.keys(s.trick).length === 0) && s.counts.every((c) => c === 27)));
-    if (s.anti_tribute && s.phase === 1 && s.counts.every((c) => c === 27)) parts.push('抗贡！进贡方持有两张大王，由头游先出');
+    if (s.anti_tribute && s.phase === 1 && s.counts.every((c) => c === 27)) parts.push(T('抗贡！进贡方持有两张大王，由头游先出'));
     const box = h('div', { class: 't' });
     for (const p of parts) box.appendChild(h('span', {}, p));
     if (showTrib) {
       for (const t of trib) {
         box.appendChild(h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
-          `${nameOf(t.from)} ${t.is_return ? '还' : '贡'}`, cardEl(t.card, { level: s.level, size: 'm' }), `给 ${nameOf(t.to)}`));
+          t.is_return ? T('{name} 还', { name: nameOf(t.from) }) : T('{name} 贡', { name: nameOf(t.from) }), cardEl(t.card, { level: s.level, size: 'm' }), T('给 {name}', { name: nameOf(t.to) })));
       }
     }
     centerMsg.replaceChildren(...(box.childNodes.length ? [box] : []));
@@ -390,10 +392,10 @@ export function mountTable(app, roomId, watch) {
     pauseBtn.style.display = s.status === 'playing' && !isPaused() && (you() >= 0 || S.canManage) ? '' : 'none';
     if (!isPaused() || s.phase >= 2) return;
     const box = h('div', { class: 'panel pause-box' },
-      h('h2', {}, '牌局已暂停'),
-      h('div', { class: 'sub' }, s.pause_by ? `${s.pause_by} 按了暂停，点“继续”从原处接着打。`
-        : (s.seats.some((st) => st.kind === 'human') ? '玩家都离开了，他们回来后从原处继续。' : '没人观战时这桌会暂停。')),
-      s.pause_by && (you() >= 0 || S.canManage) ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => send({ action: 'resume' }) }, '继续')) : null);
+      h('h2', {}, T('牌局已暂停')),
+      h('div', { class: 'sub' }, s.pause_by ? T('{name} 按了暂停，点“继续”从原处接着打。', { name: tr(s.pause_by) })
+        : (s.seats.some((st) => st.kind === 'human') ? T('玩家都离开了，他们回来后从原处继续。') : T('没人观战时这桌会暂停。'))),
+      s.pause_by && (you() >= 0 || S.canManage) ? h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => send({ action: 'resume' }) }, T('继续'))) : null);
     centerMsg.replaceChildren(box);
     centerMsg.style.pointerEvents = 'auto';
   }
@@ -409,17 +411,18 @@ export function mountTable(app, roomId, watch) {
     } else if (myTurn()) {
       if (s.deadline) kids.push(h('span', { class: 'timer-text', id: 'timer' }, ''));
       if (s.phase === 0) {
-        kids.push(h('span', { class: 'yourturn' }, '还贡'),
-          h('button', { class: 'btn primary', disabled: S.sel.size !== 1 || S.busy, onclick: doReturn }, '还给他'));
+        kids.push(h('span', { class: 'yourturn' }, T('还贡')),
+          h('button', { class: 'btn primary', disabled: S.sel.size !== 1 || S.busy, onclick: doReturn }, T('还给他')));
       } else {
         kids.push(
-          h('button', { class: 'btn', disabled: s.is_leading || S.busy, onclick: doPass }, '不出'),
-          s.hint_available ? h('button', { class: 'btn', disabled: S.busy, onclick: () => send({ action: 'hint' }) }, '提示') : null,
-          h('button', { class: 'btn primary', disabled: S.sel.size === 0 || S.busy, onclick: doPlay }, '出牌'));
+          h('button', { class: 'btn', disabled: s.is_leading || S.busy, onclick: doPass }, T('不出')),
+          s.hint_available ? h('button', { class: 'btn', disabled: S.busy, onclick: () => send({ action: 'hint' }) }, T('提示')) : null,
+          h('button', { class: 'btn primary', disabled: S.sel.size === 0 || S.busy, onclick: doPlay }, T('出牌')));
       }
     } else if (s.phase < 2) {
       const cur = s.current;
-      kids.push(h('span', { class: 'wait' }, you() < 0 ? `观战中，轮到 ${nameOf(cur)}` : `等待 ${nameOf(cur)}${s.phase === 0 ? ' 还贡' : ' 出牌'}…`));
+      kids.push(h('span', { class: 'wait' }, you() < 0 ? T('观战中，轮到 {name}', { name: nameOf(cur) })
+        : s.phase === 0 ? T('等待 {name} 还贡…', { name: nameOf(cur) }) : T('等待 {name} 出牌…', { name: nameOf(cur) })));
     }
     // landscape phones (short screens): the table between the top bar and the hand is only about
     // 90 px high, so the play buttons go to the tool bar under the hand (middle) instead of
@@ -434,29 +437,29 @@ export function mountTable(app, roomId, watch) {
     const cards = myHand();
     if (you() >= 0 && cards.length) {
       const arranged = S.arrange || S.custom.length;
-      L.push(h('button', { class: 'btn small' + (arranged ? ' primary' : ''), title: arranged ? '恢复按点数排列' : '把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）',
+      L.push(h('button', { class: 'btn small' + (arranged ? ' primary' : ''), title: arranged ? T('恢复按点数排列') : T('把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）'),
         onclick: () => {
           if (arranged) { S.arrange = false; S.custom = []; } else S.arrange = true;
           pref.set('arrange', S.arrange); S.sel.clear(); renderHand(); renderActions();
-        } }, arranged ? '恢复' : '一键理牌'));
-      if (!arranged) L.push(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); renderActions(); } }, S.desc ? '大→小' : '小→大'));
-      const sf = h('span', { class: 'sfpick', title: '选出这个花色的同花顺（再点换下一个）' }, h('span', { class: 'lab' }, '同花顺'));
+        } }, arranged ? T('恢复') : T('一键理牌')));
+      if (!arranged) L.push(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); renderActions(); } }, S.desc ? T('大→小') : T('小→大')));
+      const sf = h('span', { class: 'sfpick', title: T('选出这个花色的同花顺（再点换下一个）') }, h('span', { class: 'lab' }, isEn ? 'Str. flush' : '同花顺'));
       for (let su = 0; su < 4; su++) {
         const list = straightFlushes(cards, s.level, su);
         sf.appendChild(h('button', { class: 'sfb' + (su === 1 || su === 3 ? ' red' : ''), disabled: !list.length, title: SUITS[su], 'aria-label': SUITS[su], onclick: () => pickSF(su), html: suitSvg(su) }));
       }
       if (inBar) R.push(sf); else M.push(sf);
       if (S.sel.size) {
-        R.push(h('button', { class: 'btn small', title: '把选中的牌放成一列', onclick: groupSelected }, '理牌'));
-        R.push(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); } }, '重选'));
+        R.push(h('button', { class: 'btn small', title: T('把选中的牌放成一列'), onclick: groupSelected }, T('理牌')));
+        R.push(h('button', { class: 'btn small', onclick: () => { S.sel.clear(); renderHand(); renderActions(); } }, T('重选')));
       }
     }
     if (you() >= 0 && s.played) {
-      R.push(h('button', { class: 'btn small' + (S.counter ? ' primary' : ''), title: '显示其他三家还剩哪些牌',
-        onclick: () => { S.counter = !S.counter; pref.set('counter', S.counter); renderCounter(); renderActions(); } }, '记牌器'));
+      R.push(h('button', { class: 'btn small' + (S.counter ? ' primary' : ''), title: T('显示其他三家还剩哪些牌'),
+        onclick: () => { S.counter = !S.counter; pref.set('counter', S.counter); renderCounter(); renderActions(); } }, T('记牌器')));
     }
     if (s.mode === 'teach' && you() >= 0) {
-      R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? '盖牌' : '明牌'));
+      R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? T('盖牌') : T('明牌')));
     }
     if (inBar) M.push(h('div', { class: 'play-group' }, ...playKids));
     toolsEl.replaceChildren(h('div', { class: 'g l' }, ...L), h('div', { class: 'g m' }, ...M), h('div', { class: 'g r' }, ...R));
@@ -539,13 +542,13 @@ export function mountTable(app, roomId, watch) {
     for (const g of S.custom) {
       const got = [];
       for (const t of g) if (left[t] > 0) { left[t]--; got.push(t); }
-      if (got.length) { custom.push(got); cols.push(sortCards(got, s.level, true)); kinds.push(got.length > 1 ? '自选' : null); }
+      if (got.length) { custom.push(got); cols.push(sortCards(got, s.level, true)); kinds.push(got.length > 1 ? T('自选') : null); }
     }
     S.custom = custom;
     const rest = [];
     for (const [t, k] of Object.entries(left)) for (let i = 0; i < k; i++) rest.push(+t);
     if (S.arrange) {
-      for (const g of arrangeHand(rest, s.level)) { cols.push(g.cards); kinds.push(g.cards.length > 1 ? g.kind : null); }
+      for (const g of arrangeHand(rest, s.level)) { cols.push(g.cards); kinds.push(g.cards.length > 1 ? T(g.kind) : null); }
     } else {
       for (const c of columns(rest, s.level, S.desc)) { cols.push(c); kinds.push(null); }
     }
@@ -664,7 +667,7 @@ export function mountTable(app, roomId, watch) {
   }
   function doReturn() {
     const t = selectedTypes();
-    if (t.length !== 1) return toast('请选择一张牌', 'err');
+    if (t.length !== 1) return toast(T('请选择一张牌'), 'err');
     S.busy = true;
     renderActions();
     send({ action: 'return', card: t[0] });
@@ -684,7 +687,7 @@ export function mountTable(app, roomId, watch) {
   function renderSide() {
     if (!S.hints || !myTurn()) { side.replaceChildren(); return; }
     const s = S.s;
-    const box = h('div', { class: 'hints' }, h('h3', {}, h('span', {}, S.s && S.s.think === 'deep' ? 'AI 建议（推演后的期望升级数）' : 'AI 建议（期望升级数）'), h('button', { class: 'btn small', onclick: () => { S.hints = null; renderSide(); } }, '收起')));
+    const box = h('div', { class: 'hints' }, h('h3', {}, h('span', {}, S.s && S.s.think === 'deep' ? T('AI 建议（推演后的期望升级数）') : T('AI 建议（期望升级数）')), h('button', { class: 'btn small', onclick: () => { S.hints = null; renderSide(); } }, T('收起'))));
     S.hints.forEach((m, i) => {
       const v = Math.max(-3, Math.min(3, m.q));
       const w = Math.abs(v) / 3 * 50;
@@ -692,7 +695,7 @@ export function mountTable(app, roomId, watch) {
       const mini = h('div', { class: 'mini' });
       for (const c of sortCards(m.cards, s.level)) mini.appendChild(cardEl(c, { level: s.level, size: 'm' }));
       box.appendChild(h('div', { class: 'hint-row' + (i === 0 ? ' best' : ''), onclick: () => (m.kind === 0 ? doPass() : selectCards(m.cards)) },
-        h('span', { class: 'd' }, m.desc), h('span', { class: 'v' }, (m.q >= 0 ? '+' : '') + m.q.toFixed(2)),
+        h('span', { class: 'd' }, tr(m.desc)), h('span', { class: 'v' }, (m.q >= 0 ? '+' : '') + m.q.toFixed(2)),
         m.cards.length ? mini : null, h('div', { class: 'bar' }, bar)));
     });
     const below = handWrap.offsetHeight + toolsEl.offsetHeight + 8;
@@ -707,23 +710,23 @@ export function mountTable(app, roomId, watch) {
   function showReview(rv) {
     if (!rv || rv.rank == null) return;
     const node = rv.rank === 1
-      ? h('span', {}, `AI 点评：与 AI 首选一致（共 ${rv.total} 种出法）`)
+      ? h('span', {}, T('AI 点评：与 AI 首选一致（共 {total} 种出法）', { total: rv.total }))
       : rv.searched === false
-        ? h('span', {}, `AI 点评：这一手不在 AI 重点推演的几手之内（网络估计 ${fmt(rv.chosen_q)}）；AI 首选「${rv.best.desc}」期望 ${fmt(rv.best.q)}`)
-        : h('span', {}, `AI 点评：你的出法在 ${rv.total} 种中排第 ${rv.rank}，期望 ${fmt(rv.chosen_q)}；AI 首选「${rv.best.desc}」期望 ${fmt(rv.best.q)}`);
+        ? h('span', {}, T('AI 点评：这一手不在 AI 重点推演的几手之内（网络估计 {q}）；AI 首选「{best}」期望 {bq}', { q: fmt(rv.chosen_q), best: tr(rv.best.desc), bq: fmt(rv.best.q) }))
+        : h('span', {}, T('AI 点评：你的出法在 {total} 种中排第 {rank}，期望 {q}；AI 首选「{best}」期望 {bq}', { total: rv.total, rank: rv.rank, q: fmt(rv.chosen_q), best: tr(rv.best.desc), bq: fmt(rv.best.q) }));
     toast(node, '', 5200);
   }
   const fmt = (q) => (q == null ? '—' : (q >= 0 ? '+' : '') + q.toFixed(2));
 
   function chooseDialog(options) {
     const s = S.s;
-    const box = h('div', {}, h('h2', {}, '选择牌型'), h('div', { class: 'sub' }, '这手牌可以有多种打法'));
+    const box = h('div', {}, h('h2', {}, T('选择牌型')), h('div', { class: 'sub' }, T('这手牌可以有多种打法')));
     const list = h('div', { class: 'result-list' });
     let m;
     for (const o of options) {
-      list.appendChild(h('button', { class: 'btn', style: { width: '100%' }, onclick: () => { m.close(); S.busy = true; renderActions(); send({ action: 'play', cards: o.cards, kind: o.kind, key: o.key }); } }, o.desc));
+      list.appendChild(h('button', { class: 'btn', style: { width: '100%' }, onclick: () => { m.close(); S.busy = true; renderActions(); send({ action: 'play', cards: o.cards, kind: o.kind, key: o.key }); } }, tr(o.desc)));
     }
-    box.append(list, h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: () => m.close() }, '取消')));
+    box.append(list, h('div', { class: 'actions' }, h('button', { class: 'btn small', onclick: () => m.close() }, T('取消'))));
     m = modal(box, { onClose: () => {} });
     void s;
   }
@@ -740,48 +743,50 @@ export function mountTable(app, roomId, watch) {
     const fill = () => {
       const s2 = S.s;
       const rr = s2.result || r;
-      const title = rr.match_over && s2.length === 'full' ? (weWin ? '我方过 A，赢下整场！' : '对方过 A，赢下整场') : (weWin ? (rr.gain === 3 ? '我方双上！' : '我方赢了这一局') : (rr.gain === 3 ? '对方双上' : '对方赢了这一局'));
+      const title = rr.match_over && s2.length === 'full' ? (weWin ? T('我方过 A，赢下整场！') : T('对方过 A，赢下整场')) : (weWin ? (rr.gain === 3 ? T('我方双上！') : T('我方赢了这一局')) : (rr.gain === 3 ? T('对方双上') : T('对方赢了这一局')));
       const rows = h('div', { class: 'result-list' });
       rr.order.forEach((p, i) => {
-        const place = i < 3 || s2.finished.includes(p) ? PLACE[i] : '末游';
+        const place = i < 3 || s2.finished.includes(p) ? PLACE[i] : PLACE[3];
         rows.appendChild(h('div', { class: 'result-row' + (p % 2 === ot ? ' ours' : '') },
-          h('span', { class: 'pl' }, rr.gain === 3 && i >= 2 ? '下游' : place),
-          h('span', {}, nameOf(p), h('span', { class: 'rd' }, p % 2 === ot ? '  我方' : '  对方')),
-          h('span', { class: 'rd' }, p === you() ? '你' : '')));
+          h('span', { class: 'pl' }, rr.gain === 3 && i >= 2 ? T('下游') : T(place)),
+          h('span', {}, nameOf(p), h('span', { class: 'rd' }, p % 2 === ot ? T('  我方') : T('  对方'))),
+          h('span', { class: 'rd' }, p === you() ? T('你') : '')));
       });
       const wt = rr.win_team;
       let change;
       const scoreLine = rr.score != null
-        ? h('div', { class: 'scoreline' }, h('span', {}, `底分 ${rr.gain}`), h('span', { class: 'x' }, '×'), h('span', {}, `倍数 ${s2.multiplier}`), h('span', { class: 'x' }, '='),
-          h('b', { class: weWin ? '' : 'neg' }, `${weWin ? '+' : '-'}${rr.score} 分`))
+        ? h('div', { class: 'scoreline' }, h('span', {}, T('底分 {n}', { n: rr.gain })), h('span', { class: 'x' }, '×'), h('span', {}, T('倍数 {n}', { n: s2.multiplier })), h('span', { class: 'x' }, '='),
+          h('b', { class: weWin ? '' : 'neg' }, T('{sign}{n} 分', { sign: weWin ? '+' : '-', n: rr.score })))
         : null;
+      const upText = () => (wt === ot ? T('我方升 {n} 级', { n: rr.gain }) : T('对方升 {n} 级', { n: rr.gain }));
       if (s2.length === 'quick') {
         change = h('div', {}, scoreLine, h('div', { class: 'sub' }, rr.score != null
-          ? `总积分 ${s2.points[ot]} : ${s2.points[1 - ot]}`
-          : `${weWin ? '我方' : '对方'} +${rr.gain} 分　总积分 ${s2.points[ot]} : ${s2.points[1 - ot]}`));
+          ? T('总积分 {a} : {b}', { a: s2.points[ot], b: s2.points[1 - ot] })
+          : (weWin ? T('我方 +{n} 分　总积分 {a} : {b}', { n: rr.gain, a: s2.points[ot], b: s2.points[1 - ot] })
+            : T('对方 +{n} 分　总积分 {a} : {b}', { n: rr.gain, a: s2.points[ot], b: s2.points[1 - ot] }))));
       } else if (scoreLine) {
         change = h('div', {},
-          h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, `${wt === ot ? '我方' : '对方'}升 ${rr.gain} 级`), h('span', { class: 'to' }, RANKS[rr.after[wt]])),
-          scoreLine, h('div', { class: 'sub' }, `总分 ${s2.totals[ot]} : ${s2.totals[1 - ot]}`));
+          h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, upText()), h('span', { class: 'to' }, RANKS[rr.after[wt]])),
+          scoreLine, h('div', { class: 'sub' }, T('总分 {a} : {b}', { a: s2.totals[ot], b: s2.totals[1 - ot] })));
       } else {
         change = h('div', {},
-          h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, `${wt === ot ? '我方' : '对方'}升 ${rr.gain} 级`), h('span', { class: 'to' }, RANKS[rr.after[wt]])),
-          rr.a_reset ? h('div', { class: 'sub' }, '打 A 三次未过，退回打 2') : null);
+          h('div', { class: 'lvchange' }, h('span', {}, RANKS[rr.before[wt]]), h('span', { class: 'arrow' }, upText()), h('span', { class: 'to' }, RANKS[rr.after[wt]])),
+          rr.a_reset ? h('div', { class: 'sub' }, T('打 A 三次未过，退回打 2')) : null);
       }
       const readyHumans = s2.seats.filter((x) => x.kind === 'human');
-      const waiting = readyHumans.filter((x) => !x.ready).map((x) => x.name);
+      const waiting = readyHumans.filter((x) => !x.ready).map((x) => tr(x.name));
       const meReady = you() >= 0 && s2.seats[you()].ready;
-      const btnText = rr.match_over && s2.length === 'full' ? '再来一场' : '下一局';
+      const btnText = rr.match_over && s2.length === 'full' ? T('再来一场') : T('下一局');
       box.replaceChildren(...[
-        rr.match_over && s2.length === 'full' ? h('div', { class: 'win-banner' }, weWin ? '胜' : '负') : null,
+        rr.match_over && s2.length === 'full' ? h('div', { class: 'win-banner' }, weWin ? T('胜') : T('负')) : null,
         h('h2', {}, title),
-        h('div', { class: 'sub' }, s2.length === 'quick' ? `本局打 ${RANKS[s2.level]}` : `本局打 ${RANKS[s2.level]}`),
+        h('div', { class: 'sub' }, T('本局打 {r}', { r: RANKS[s2.level] })),
         rows, change,
         h('div', { class: 'actions' },
-          you() >= 0 ? h('button', { class: 'btn primary', disabled: meReady, onclick: () => send({ action: 'ready' }) }, meReady ? '已准备' : btnText) : null,
-          canEnd() ? h('button', { class: 'btn danger', onclick: endTable }, '结束牌局') : null,
-          h('button', { class: 'btn', onclick: leave }, '离开')),
-        waiting.length && (meReady || you() < 0) ? h('div', { class: 'sub', style: { marginTop: '10px' } }, `等待：${waiting.join('、')}`) : null,
+          you() >= 0 ? h('button', { class: 'btn primary', disabled: meReady, onclick: () => send({ action: 'ready' }) }, meReady ? T('已准备') : btnText) : null,
+          canEnd() ? h('button', { class: 'btn danger', onclick: endTable }, T('结束牌局')) : null,
+          h('button', { class: 'btn', onclick: leave }, T('离开'))),
+        waiting.length && (meReady || you() < 0) ? h('div', { class: 'sub', style: { marginTop: '10px' } }, T('等待：{names}', { names: waiting.join(T('、')) })) : null,
       ].filter(Boolean));
     };
     fill();
@@ -834,24 +839,24 @@ export function mountTable(app, roomId, watch) {
         const dy = c.y - (zr.top + zr.height / 2);
         cardsEls.forEach((el, i) => el.animate([{ transform: `translate(${dx}px, ${dy}px) scale(.45)`, opacity: 0.2 }, { transform: 'none', opacity: 1 }], { duration: 360, delay: i * 18, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'backwards' }));
       }
-      if (ev.bomb) boom(BOMB_WORD[ev.kind] || '炸弹');
-      if (ev.how === 'timeout') toast(`${nameOf(ev.player)} 超时，系统随机出牌`, 'err');
+      if (ev.bomb) boom(T(BOMB_WORD[ev.kind] || BOMB_WORD[8]));
+      if (ev.how === 'timeout') toast(T('{name} 超时，系统随机出牌', { name: nameOf(ev.player) }), 'err');
       if (ev.finished) {
         const place = S.s.finished.indexOf(ev.player);
-        if (place >= 0) toast(`${nameOf(ev.player)} 出完了：${PLACE[place]}`);
+        if (place >= 0) toast(T('{name} 出完了：{place}', { name: nameOf(ev.player), place: T(PLACE[place]) }));
       }
     } else if (ev.type === 'pass') {
       sound.pass();
-      if (ev.how === 'timeout') toast(`${nameOf(ev.player)} 超时`, 'err');
+      if (ev.how === 'timeout') toast(T('{name} 超时', { name: nameOf(ev.player) }), 'err');
     } else if (ev.type === 'deal') {
       animateDeal();
     } else if (ev.type === 'tribute') {
       const trib = (S.s.tribute || []).filter((t) => !t.is_return);
-      if (S.s.anti_tribute) toast('抗贡！进贡方持有两张大王，免进贡');
+      if (S.s.anti_tribute) toast(T('抗贡！进贡方持有两张大王，免进贡'));
       trib.forEach((t, i) => setTimeout(() => flyCard(t.card, t.from, t.to), i * 350));
     } else if (ev.type === 'return') {
       flyCard(ev.card, ev.from, ev.to);
-      if (ev.how === 'timeout') toast(`${nameOf(ev.from)} 超时，随机还贡`, 'err');
+      if (ev.how === 'timeout') toast(T('{name} 超时，随机还贡', { name: nameOf(ev.from) }), 'err');
     }
   }
 
@@ -924,41 +929,41 @@ export function mountTable(app, roomId, watch) {
   // ------------------------------------------------------------ misc
   function showHelp() {
     const lv = S.s ? RANKS[S.s.level] : '2';
-    const row = (a, b) => h('div', { class: 'result-row', style: { gridTemplateColumns: '6em 1fr' } }, h('span', { class: 'pl' }, a), h('span', { class: 'rd', style: { color: 'var(--text)' } }, b));
+    const row = (a, b) => h('div', { class: 'result-row', style: { gridTemplateColumns: isEn ? '7.5em 1fr' : '6em 1fr' } }, h('span', { class: 'pl' }, a), h('span', { class: 'rd', style: { color: 'var(--text)' } }, b));
     const box = h('div', {},
-      h('h2', {}, '规则速查'),
-      h('div', { class: 'sub' }, `本局打 ${lv}：${lv} 排在 A 之上，红桃 ${lv} 是逢人配，可以当除王以外的任何牌`),
+      h('h2', {}, T('规则速查')),
+      h('div', { class: 'sub' }, T('本局打 {r}：{r} 排在 A 之上，红桃 {r} 是逢人配，可以当除王以外的任何牌', { r: lv })),
       h('div', { class: 'result-list' },
-        row('单张对子', '大王 > 小王 > 级牌 > A > K … > 2'),
-        row('三带二', '三张同点带一对，比三张的大小'),
-        row('顺子', '正好 5 张，A2345 最小、10JQKA 最大'),
-        row('三连对', '3 个连续对子，如 334455'),
-        row('钢板', '2 个连续三张，如 333444'),
-        row('炸弹', '天王炸 > 6 张以上炸弹 > 同花顺 > 5 张炸弹 > 4 张炸弹'),
-        row('接风', '出完最后一手牌没人要时，由队友接着出'),
-        row('升级', '双上升 3 级，队友三游升 2 级，队友末游升 1 级')),
+        row(T('单张对子'), T('大王 > 小王 > 级牌 > A > K … > 2')),
+        row(T('三带二'), T('三张同点带一对，比三张的大小')),
+        row(T('顺子'), T('正好 5 张，A2345 最小、10JQKA 最大')),
+        row(T('三连对'), T('3 个连续对子，如 334455')),
+        row(T('钢板'), T('2 个连续三张，如 333444')),
+        row(T('炸弹'), T('天王炸 > 6 张以上炸弹 > 同花顺 > 5 张炸弹 > 4 张炸弹')),
+        row(T('接风'), T('出完最后一手牌没人要时，由队友接着出')),
+        row(T('升级'), T('双上升 3 级，队友三游升 2 级，队友末游升 1 级'))),
       h('div', { class: 'sub', style: { marginTop: '14px', textAlign: 'left' } },
-        '随打随停：离开牌桌（或手机切到后台几秒）牌局就暂停，回来从原处接着打；有别的玩家在时，轮到你由 AI 托管。也可以点 ⏸ 暂停。操作：点牌或按住拖动选牌（选中的牌变成金色），双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。选几张牌再点“理牌”，把它们放成一列；“一键理牌”自动把炸弹、同花顺、顺子、三带二等组合各放一列，“恢复”回到按点数排列；“同花顺 ♠♥♣♦”一键选出该花色的同花顺（含逢人配，再点换下一个）；“记牌器”显示其他三家还剩的各点数张数。'),
-      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, '知道了')));
+        T('随打随停：离开牌桌（或手机切到后台几秒）牌局就暂停，回来从原处接着打；有别的玩家在时，轮到你由 AI 托管。也可以点 ⏸ 暂停。操作：点牌或按住拖动选牌（选中的牌变成金色），双击选中一整列，右键清空。回车出牌，空格不出，Esc 取消选择。选几张牌再点“理牌”，把它们放成一列；“一键理牌”自动把炸弹、同花顺、顺子、三带二等组合各放一列，“恢复”回到按点数排列；“同花顺 ♠♥♣♦”一键选出该花色的同花顺（含逢人配，再点换下一个）；“记牌器”显示其他三家还剩的各点数张数。')),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', onclick: () => m.close() }, T('知道了'))));
     const m = modal(box, { onClose: () => {} });
   }
 
   function leave() {
     const s = S.s;
-    let sub = '之后可以从首页回到这张牌桌。';
+    let sub = T('之后可以从首页回到这张牌桌。');
     if (s && you() >= 0 && s.status === 'playing') {
       const others = s.seats.some((st, i) => i !== you() && st.kind === 'human' && st.connected);
-      sub = others ? '其他玩家会接着打，轮到你时由 AI 替你出牌（托管）。之后从首页“回到座位”接着打。'
-        : '牌局会暂停，之后从首页“回到座位”，从原处接着打。';
+      sub = others ? T('其他玩家会接着打，轮到你时由 AI 替你出牌（托管）。之后从首页“回到座位”接着打。')
+        : T('牌局会暂停，之后从首页“回到座位”，从原处接着打。');
     } else if (s && you() < 0 && !s.seats.some((st) => st.kind === 'human')) {
-      sub = '没人观战时这桌会暂停，之后从首页“观战”接着看。';
+      sub = T('没人观战时这桌会暂停，之后从首页“观战”接着看。');
     }
-    const box = h('div', {}, h('h2', {}, '离开牌桌？'), h('div', { class: 'sub' }, sub));
+    const box = h('div', {}, h('h2', {}, T('离开牌桌？')), h('div', { class: 'sub' }, sub));
     let m;
     box.appendChild(h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => m.close() }, '留下'),
-      h('button', { class: 'btn primary', onclick: () => { m.close(); location.hash = '#/'; } }, '离开'),
-      canEnd() ? h('button', { class: 'btn danger', onclick: () => { m.close(); endTable(); } }, '结束牌局') : null));
+      h('button', { class: 'btn', onclick: () => m.close() }, T('留下')),
+      h('button', { class: 'btn primary', onclick: () => { m.close(); location.hash = '#/'; } }, T('离开')),
+      canEnd() ? h('button', { class: 'btn danger', onclick: () => { m.close(); endTable(); } }, T('结束牌局')) : null));
     m = modal(box, { onClose: () => {} });
   }
 
@@ -973,12 +978,12 @@ export function mountTable(app, roomId, watch) {
   function endTable() {
     const s = S.s;
     const others = s && s.seats.some((st, i) => i !== you() && st.kind === 'human' && st.taken);
-    const box = h('div', {}, h('h2', {}, '结束牌局？'),
-      h('div', { class: 'sub' }, '这张牌桌会关闭，进度不再保留' + (others ? '，桌上其他玩家也会回到首页。' : '。')));
+    const box = h('div', {}, h('h2', {}, T('结束牌局？')),
+      h('div', { class: 'sub' }, others ? T('这张牌桌会关闭，进度不再保留，桌上其他玩家也会回到首页。') : T('这张牌桌会关闭，进度不再保留。')));
     let m;
     box.appendChild(h('div', { class: 'actions' },
-      h('button', { class: 'btn', onclick: () => { m.close(); if (fromResult) showResult(); } }, '取消'),
-      h('button', { class: 'btn danger', onclick: () => { m.close(); S.ending = true; send({ action: 'end' }); } }, '结束牌局')));
+      h('button', { class: 'btn', onclick: () => { m.close(); if (fromResult) showResult(); } }, T('取消')),
+      h('button', { class: 'btn danger', onclick: () => { m.close(); S.ending = true; send({ action: 'end' }); } }, T('结束牌局'))));
     const fromResult = !!(S.modal && s && s.phase >= 2);
     if (S.modal) { S.modal.close(); S.modal = null; }
     m = modal(box, { onClose: () => {} });

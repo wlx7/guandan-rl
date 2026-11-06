@@ -1,4 +1,5 @@
 // Shared helpers
+import { T, tr } from './i18n.js';
 
 // older phone browsers / Android WebViews (before Chrome 86) lack replaceChildren
 if (!Element.prototype.replaceChildren) {
@@ -140,7 +141,7 @@ export function modal(content, { onClose } = {}) {
 
 // Model <select> grouped as 内置 / 模型库 / 训练, showing display names.
 export function modelLabel(m) {
-  return m.label || `${m.source}：${m.id.split('/').slice(-1)[0]}`;
+  return tr(m.label) || `${tr(m.source)}${T('：')}${m.id.split('/').slice(-1)[0]}`;
 }
 export function fillModelSelect(sel, models, value) {
   const groups = new Map();
@@ -150,7 +151,7 @@ export function fillModelSelect(sel, models, value) {
     groups.get(g).push(m);
   }
   for (const [g, list] of groups) {
-    const og = h('optgroup', { label: g });
+    const og = h('optgroup', { label: tr(g) });
     for (const m of list) og.appendChild(h('option', { value: m.id, selected: m.id === value }, modelLabel(m)));
     sel.appendChild(og);
   }

@@ -1,4 +1,6 @@
 // Minimal canvas line chart with crosshair tooltip. Series colors validated for the felt surface.
+import { T as _T } from './i18n.js';
+
 export const SERIES_COLORS = ['#B08A30', '#2A9FD0', '#D65A50'];
 
 export function fmtFrames(x) {
@@ -116,7 +118,7 @@ export class LineChart {
           g.beginPath(); g.arc(X(q.x), Y(q.y), 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
         }
       });
-      this.tip.innerHTML = `<div style="color:#b3c7bc">${o.xLabel || '样本'}：${o.xFormat ? o.xFormat(best.x) : fmtFrames(best.x)}</div>${rows.join('')}`;
+      this.tip.innerHTML = `<div style="color:#b3c7bc">${_T('{label}：{value}', { label: o.xLabel || _T('样本'), value: o.xFormat ? o.xFormat(best.x) : fmtFrames(best.x) })}</div>${rows.join('')}`;
       this.tip.style.display = 'block';
       const tw = this.tip.offsetWidth;
       this.tip.style.left = `${Math.min(Math.max(0, x + 14), W - tw)}px`;

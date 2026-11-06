@@ -123,7 +123,13 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .nav .spacer { flex: 1; }
 
 /* ---------- home ---------- */
-.home { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.home { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; position: relative; }
+.lang-switch { position: absolute; top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); z-index: 2; font-size: 13px; }
+.lang-switch button { padding: 0.35em 0.9em; }
+/* English: badges drawn by CSS */
+:lang(en) .teamlv.banker::after { content: "Banker"; font-family: var(--sans, inherit); font-size: 9px; }
+:lang(en) .hand .card.wild .idx::after { content: "W"; }
+:lang(en) .hint-row.best .d::before { content: "AI pick  "; }
 .home-inner { width: min(760px, 100%); text-align: center; }
 .fan { position: relative; height: 170px; margin: 0 auto 6px; width: 300px; }
 .fan .card { position: absolute; left: 50%; bottom: 0; --cw: 86px; --ch: 122px; transform-origin: 50% 120%; animation: fanout 0.9s cubic-bezier(.2, .9, .25, 1.15) both; }

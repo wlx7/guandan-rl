@@ -46,13 +46,7 @@ public class ServerService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (Build.VERSION.SDK_INT >= 26 && nm != null) {
-            NotificationChannel ch = new NotificationChannel(CHANNEL, "牌桌服务", NotificationManager.IMPORTANCE_LOW);
-            ch.setDescription("局域网牌桌运行时显示，可以从这里退出");
-            ch.setShowBadge(false);
-            nm.createNotificationChannel(ch);
-        }
+        channel();
         goForeground(text());
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         if (pm != null) {
@@ -70,6 +64,17 @@ public class ServerService extends Service {
         handler.postDelayed(this::tick, TICK_MS);
     }
 
+    /** Creates the notification channel, or renames it after the language changed. */
+    private void channel() {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (Build.VERSION.SDK_INT >= 26 && nm != null) {
+            NotificationChannel ch = new NotificationChannel(CHANNEL, Lang.pick(this, "牌桌服务", "Table server"), NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription(Lang.pick(this, "局域网牌桌运行时显示，可以从这里退出", "Shown while LAN tables run; you can quit from here"));
+            ch.setShowBadge(false);
+            nm.createNotificationChannel(ch);
+        }
+    }
+
     private String text() {
         String url = "";
         int tables = 0;
@@ -77,6 +82,10 @@ public class ServerService extends Service {
             url = Native.lanUrl();
             tables = Native.tables();
         } catch (Throwable ignored) {
+        }
+        if (Lang.en(this)) {
+            String where = url.isEmpty() ? "Not on WiFi: single-device play only" : "Phones on the same WiFi open " + url;
+            return (tables > 0 ? tables + (tables == 1 ? " table playing · " : " tables playing · ") : "") + where;
         }
         String where = url.isEmpty() ? "没有连上 WiFi，只能单机打" : "同一 WiFi 的手机打开 " + url;
         return (tables > 0 ? tables + " 桌进行中 · " : "") + where;
@@ -100,13 +109,13 @@ public class ServerService extends Service {
         PendingIntent quitPi = PendingIntent.getService(this, 1, new Intent(this, ServerService.class).setAction(ACTION_QUIT), flags);
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_stat)
-                .setContentTitle("掼蛋 AI 正在运行")
+                .setContentTitle(Lang.pick(this, "掼蛋 AI 正在运行", "Guandan AI is running"))
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(openPi)
                 .setOngoing(true)
                 .setShowWhen(false)
-                .addAction(new Notification.Action.Builder(null, "退出", quitPi).build());
+                .addAction(new Notification.Action.Builder(null, Lang.pick(this, "退出", "Quit"), quitPi).build());
         return b.build();
     }
 
@@ -146,6 +155,7 @@ public class ServerService extends Service {
             quit();
             return START_NOT_STICKY;
         }
+        channel();
         goForeground(text()); // required after every startForegroundService
         return START_NOT_STICKY;
     }

@@ -17,6 +17,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -67,6 +68,15 @@ public class MainActivity extends Activity {
                 return true;
             }
         });
+        // the page reports its interface language, used for the notification text
+        web.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void setLang(String lang) {
+                if (Lang.set(getApplicationContext(), lang)) ui.post(() -> {
+                    if (Server.port() > 0) ServerService.start(MainActivity.this);
+                });
+            }
+        }, "GuandanApp");
         if (state != null) web.restoreState(state);
 
         FrameLayout root = new FrameLayout(this);
@@ -107,7 +117,7 @@ public class MainActivity extends Activity {
 
     private void showError(String msg) {
         TextView t = new TextView(this);
-        t.setText("服务启动失败：\n" + msg);
+        t.setText(Lang.pick(this, "服务启动失败：\n", "The server failed to start:\n") + msg);
         t.setTextColor(Color.WHITE);
         t.setTextSize(16);
         t.setGravity(Gravity.CENTER);

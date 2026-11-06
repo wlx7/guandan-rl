@@ -16,12 +16,12 @@ def cmd_serve(args):
     appmod.STATE["port"] = args.port
     ips = appmod.lan_ips()
     print("=" * 60)
-    print(" 掼蛋 AI 已启动")
-    print(f"   本机打开:   http://127.0.0.1:{args.port}/")
+    print(" 掼蛋 AI 已启动 / Guandan AI is running")
+    print(f"   本机打开 / This device:   http://127.0.0.1:{args.port}/")
     for ip in ips:
-        print(f"   局域网加入: http://{ip}:{args.port}/   (同一 WiFi 的手机/电脑)")
-    print(f"   数据目录:   {os.path.abspath(__import__('guandan.paths', fromlist=['home']).home())}")
-    print(" 关闭本窗口即可退出")
+        print(f"   局域网加入 / LAN:         http://{ip}:{args.port}/   (同一 WiFi 的手机/电脑 / phones and computers on the same WiFi)")
+    print(f"   数据目录 / Data folder:   {os.path.abspath(__import__('guandan.paths', fromlist=['home']).home())}")
+    print(" 关闭本窗口即可退出 / Close this window to quit")
     print("=" * 60, flush=True)
     if not args.no_browser:
         threading.Thread(target=lambda: (time.sleep(1.5), webbrowser.open(f"http://127.0.0.1:{args.port}/")),

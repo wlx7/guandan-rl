@@ -18,6 +18,13 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.8.0
+
+- **英文界面**：首页右上角点“中文 / English”切换，默认中文，每台设备分别记住。牌桌、开桌、训练中心、规则说明、AI 提示与点评、服务器的提示信息、牌型名称都有英文；电脑版、免安装版、安卓 App 都一样（安卓通知栏也跟着切换）。
+- 新增英文 README（README.en.md）。
+
+**English:** The interface can now be switched to English with the "中文 / English" button at the top right of the home page (Chinese stays the default; each device remembers its choice). Tables, setup, the training center, the rules, AI hints and reviews, server messages and combination names are all translated, in the Windows, portable and Android versions alike (including the Android notification). See README.en.md.
+
 ### v1.7.11
 
 - **安卓 App**（`guandan_android.apk`）：手机上装好就能打，横屏全屏。规则、AI、教学提示与点评、快速对局 / 竞技模式、计分倍数、多桌、权限都和电脑版一样，界面也是同一套；手机本身当局域网主机，朋友扫码用浏览器加入。切到后台时牌局照常（有人在就由 AI 托管你的座位，没人就暂停），通知栏显示局域网地址并可一键退出；后台 10 分钟没人打牌会自动退出省电。说明见 docs/ANDROID.md。

@@ -1,10 +1,12 @@
 // Card helpers. Card type t: rank*4+suit for 0..51 (rank 0="2" .. 12="A"; suit 0♠ 1♥ 2♣ 3♦), 52 small joker, 53 big joker.
+import { T, isEn } from './i18n.js';
+
 export const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 export const SUITS = ['♠', '♥', '♣', '♦'];
 export const rankOf = (t) => (t >= 52 ? t - 52 + 13 : t >> 2);
 export const suitOf = (t) => (t >= 52 ? 4 : t & 3);
 export const strength = (r, level) => (r >= 13 ? r + 1 : r === level ? 13 : r);
-export const rankName = (r) => (r === 13 ? '小王' : r === 14 ? '大王' : RANKS[r]);
+export const rankName = (r) => (r === 13 ? T('小王') : r === 14 ? T('大王') : RANKS[r]);
 export const levelName = (lv) => RANKS[lv];
 
 // Suit shapes drawn as SVG: phones otherwise render ♠♥♣♦ with an emoji font of a different size,
@@ -42,7 +44,9 @@ export function cardEl(t, opts = {}) {
   const s = suitOf(t);
   if (r >= 13) {
     el.classList.add('joker', r === 14 ? 'big' : 'small');
-    el.innerHTML = `<div class="idx">${r === 14 ? '大<br>王' : '小<br>王'}</div><div class="pip">${r === 14 ? '王' : '王'}</div>`;
+    el.innerHTML = isEn
+      ? `<div class="idx">${r === 14 ? 'B<br>J' : 'S<br>J'}</div><div class="pip">★</div>`
+      : `<div class="idx">${r === 14 ? '大<br>王' : '小<br>王'}</div><div class="pip">王</div>`;
     el.title = rankName(r);
     return el;
   }
@@ -51,8 +55,8 @@ export function cardEl(t, opts = {}) {
   const isWild = r === level && s === 1;
   if (isWild) el.classList.add('wild');
   const rn = RANKS[r];
-  el.innerHTML = `<div class="idx"><span class="r${rn === '10' ? ' ten' : ''}">${rn}</span><span class="s">${suitSvg(s)}</span></div><div class="pip">${suitSvg(s)}</div>${isWild ? '<span class="tagw">配</span>' : ''}`;
-  el.title = cardName(t) + (isWild ? '（逢人配）' : '');
+  el.innerHTML = `<div class="idx"><span class="r${rn === '10' ? ' ten' : ''}">${rn}</span><span class="s">${suitSvg(s)}</span></div><div class="pip">${suitSvg(s)}</div>${isWild ? `<span class="tagw">${isEn ? 'W' : '配'}</span>` : ''}`;
+  el.title = cardName(t) + (isWild ? T('（逢人配）') : '');
   return el;
 }
 
@@ -198,7 +202,7 @@ export function cardCounter(hand, played, level) {
   const seen = new Array(15).fill(0);
   for (const t of hand) seen[rankOf(t)]++;
   for (const list of played) for (const t of list) seen[rankOf(t)]++;
-  const out = [{ label: '大', r: 14 }, { label: '小', r: 13 }, { label: RANKS[level], r: level, level: true }];
+  const out = [{ label: isEn ? 'BJ' : '大', r: 14 }, { label: isEn ? 'SJ' : '小', r: 13 }, { label: RANKS[level], r: level, level: true }];
   for (let r = 12; r >= 0; r--) if (r !== level) out.push({ label: RANKS[r], r });
   return out.map((c) => {
     const total = c.r >= 13 ? 2 : 8;

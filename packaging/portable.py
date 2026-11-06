@@ -74,7 +74,7 @@ def main():
             port = int(a.split("=", 1)[1])
     v = running_guandan(port)
     if v:
-        print(f"掼蛋 AI（v{v}）已经在运行，直接打开浏览器。")
+        print(f"掼蛋 AI（v{v}）已经在运行，直接打开浏览器。 / Guandan AI (v{v}) is already running; opening the browser.")
         if "--no-browser" not in args:
             webbrowser.open(f"http://127.0.0.1:{port}/")
         return 0
@@ -95,7 +95,7 @@ if __name__ == "__main__":
         code = 1
     if code and getattr(sys, "frozen", False) and "--selftest" not in sys.argv:
         try:
-            input("\n出错了（见上面的信息）。按回车键关闭窗口……")
+            input("\n出错了（见上面的信息）。按回车键关闭窗口……\nSomething went wrong (see above). Press Enter to close this window...")
         except Exception:
             pass
     sys.exit(code)
