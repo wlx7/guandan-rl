@@ -18,6 +18,12 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.8.2
+
+- 手机横屏明牌（教学模式“明牌”或观战）：三家的手牌改成在顶上一排下面单独占一行，左边西家、中间北家、右边东家，不再挤在各自头像下面、和出的牌叠在一起；你自己出的牌放在这一行下面，手牌区相应略缩小。电脑和竖屏不变。
+
+**English:** On landscape phones, open hands (teaching mode "Show hands", or watching) get a row of their own under the players instead of piling up under each seat and over their plays.
+
 ### v1.8.1
 
 - 手机横屏时，“等待玩家加入”界面（局域网网址、座位、二维码）一屏完整显示：以前标题和网址会被顶栏挡住，二维码和按钮被截掉。

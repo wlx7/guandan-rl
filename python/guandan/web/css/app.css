@@ -316,6 +316,7 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .mini-hand { display: flex; flex-wrap: wrap; max-width: 300px; gap: 0; justify-content: center; }
 .mini-hand .card { margin-right: calc(var(--mcw) * -0.45); margin-bottom: 2px; }
 .seat.left .mini-hand, .seat.right .mini-hand { max-width: 170px; }
+.open-hands { display: none; }
 
 .zone { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 4px; z-index: 2; pointer-events: none; }
 .zone .cards { display: flex; }
@@ -640,6 +641,17 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .board.bar-play ~ .hand-bar .sfpick { padding-left: 4px; }
 }
 @media (max-height: 520px) {
+  /* open hands: one band under the top row (players and their plays), west left, north in the
+     middle, east right; one line of cards each where it fits */
+  .open-hands { display: flex; position: absolute; left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right));
+    top: calc(var(--pch) + 22px); justify-content: space-between; align-items: flex-start; gap: 12px; z-index: 2; pointer-events: none; }
+  .open-hands { --mcw: 19px; --mch: 27px; }
+  .open-hands > div { flex: 0 1 32%; display: flex; min-width: 0; }
+  .open-hands .oh-n { justify-content: center; }
+  .open-hands .oh-e { justify-content: flex-end; }
+  .open-hands .mini-hand { max-width: 100%; justify-content: inherit; padding: 3px 5px 1px; border-radius: 7px; background: rgba(0, 0, 0, 0.22); }
+}
+@media (max-height: 520px) {
   /* landscape phones: seats and address on the left, the QR code beside them, all on one screen */
   .wait-panel { width: min(760px, 96vw); padding: 12px 16px; }
   .wait-panel h2 { font-size: 17px; margin: 0 0 6px; }
@@ -657,6 +669,11 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
 @media (max-height: 330px) {
   /* very short (a phone browser with its address bar): smaller played cards */
   :root { --pcw: 32px; --pch: 45px; }
+  /* no room for a second line of open cards: one tight line each, your own play drawn on top */
+  .open-hands { --mcw: 14px; --mch: 20px; top: calc(var(--pch) + 14px); }
+  .open-hands .mini-hand { flex-wrap: nowrap; padding: 2px 4px 0; }
+  .open-hands .mini-hand .card { margin-right: calc(var(--mcw) * -0.56); }
+  .board.revealed .zone.bottom { z-index: 3; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }

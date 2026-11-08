@@ -60,7 +60,11 @@ export function mountTable(app, roomId, watch) {
   const centerMsg = h('div', { class: 'center-msg' });
   const actionbar = h('div', { class: 'actionbar' });
   const toolsEl = h('div', { class: 'hand-bar' });
-  board.append(...zoneEls, ...seatEls, centerMsg, actionbar);
+  // landscape phones: the open hands (明牌) of west / north / east get a band of their own under
+  // the players and their plays, instead of piling up under each seat
+  const openSlots = [h('div', { class: 'oh-w' }), h('div', { class: 'oh-n' }), h('div', { class: 'oh-e' })];
+  const openEl = h('div', { class: 'open-hands' }, ...openSlots);
+  board.append(...zoneEls, ...seatEls, openEl, centerMsg, actionbar);
   const hand = h('div', { class: 'hand' });
   const handWrap = h('div', { class: 'hand-wrap' }, hand);
   const side = h('div', { class: 'side-panel' });
@@ -291,6 +295,8 @@ export function mountTable(app, roomId, watch) {
   function renderSeats() {
     const s = S.s;
     board.classList.toggle('revealed', Object.keys(s.hands || {}).some((k) => +k !== base()) && (s.mode !== 'teach' || S.reveal || you() < 0));
+    const band = compactMQ.matches;
+    openSlots.forEach((e) => e.replaceChildren());
     for (let r = 0; r < 4; r++) {
       const p = (base() + r) % 4;
       const el = seatEls[r];
@@ -316,7 +322,10 @@ export function mountTable(app, roomId, watch) {
       const kids = [av, info];
       const vis = s.hands[String(p)];
       const showHand = vis && r !== 0 && (s.mode !== 'teach' || S.reveal || you() < 0);
-      if (showHand && vis.length) kids.push(miniRow(vis, s.level, 'm'));
+      if (showHand && vis.length) {
+        const row = miniRow(vis, s.level, 'm');
+        if (band) openSlots[3 - r].appendChild(row); else kids.push(row);
+      }
       el.replaceChildren(...kids);
     }
   }
@@ -460,7 +469,7 @@ export function mountTable(app, roomId, watch) {
         onclick: () => { S.counter = !S.counter; pref.set('counter', S.counter); renderCounter(); renderActions(); } }, T('记牌器')));
     }
     if (s.mode === 'teach' && you() >= 0) {
-      R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); } }, S.reveal ? T('盖牌') : T('明牌')));
+      R.push(h('button', { class: 'btn small' + (S.reveal ? ' primary' : ''), onclick: () => { S.reveal = !S.reveal; renderSeats(); renderActions(); renderHand(); } }, S.reveal ? T('盖牌') : T('明牌')));
     }
     if (inBar) M.push(h('div', { class: 'play-group' }, ...playKids));
     toolsEl.replaceChildren(h('div', { class: 'g l' }, ...L), h('div', { class: 'g m' }, ...M), h('div', { class: 'g r' }, ...R));
@@ -506,7 +515,13 @@ export function mountTable(app, roomId, watch) {
     let ch = cw * 1.4;
     let sy = ch * 0.34;
     // leave the table enough room to show everyone's plays (two bands of played cards on phones)
-    const boardMin = short ? 112 : 220;
+    let boardMin = short ? 112 : 220;
+    // landscape phones with open hands: the table also holds the band of open hands, and your own
+    // play goes below it (the hand gets a little smaller instead of the band covering it)
+    if (compactMQ.matches && board.classList.contains('revealed') && openEl.offsetHeight) {
+      const pch = parseFloat(getComputedStyle(board).getPropertyValue('--pch')) || 50;
+      boardMin = Math.max(boardMin, openEl.offsetTop + openEl.offsetHeight + pch + 8);
+    }
     const avail = vh - topbar.offsetHeight - (toolsEl.offsetHeight || 34) - 8 - boardMin;
     const maxH = Math.max(short ? 120 : 160, Math.min(vh * (vh < 420 ? 0.44 : 0.48), avail));
     // the second row may cover the lower part (big suit pip) of the first row's bottom cards
@@ -1004,7 +1019,7 @@ export function mountTable(app, roomId, watch) {
     }, 2500);
   };
   reportSize();
-  const onResize = () => { reportSize(); if (S.s && S.s.status === 'playing') { renderActions(); renderHand(); placeZones(); } };
+  const onResize = () => { reportSize(); if (S.s && S.s.status === 'playing') { renderSeats(); renderActions(); renderHand(); placeZones(); } };
   window.addEventListener('resize', onResize);
   const onKey = (e) => {
     if (!myTurn() || e.target.tagName === 'INPUT') return;
