@@ -18,6 +18,12 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.9.1
+
+手机横屏首页的标题和“开一桌”按钮现在位于屏幕中央略偏下。语言切换保留在右上角，多张牌桌可以向下滚动查看。
+
+On landscape phones, the home screen centers the title and table button below the language switch. Long table lists scroll vertically.
+
 ### v1.9.0
 
 - Windows 和安卓内置同一份新模型。训练时从同一副牌分出两条路径，比较两种出法的实际终局，微调原有网络的动作评分。
