@@ -273,7 +273,7 @@ async function viewSetup() {
             h('div', { class: 'choice-row', style: { gridTemplateColumns: '1fr 1fr 1fr' } },
               choice(cfg.scoring === 'none', T('只算升级'), T('按升级数结算：双上 3、一三游 2、一四游 1。'), () => { cfg.scoring = 'none'; render(); }),
               choice(cfg.scoring === 'standard', T('标准倍数'), T('底分同升级数；6 张以上炸弹、同花顺、天王炸每出一个翻一倍，封顶 16 倍。'), () => { cfg.scoring = 'standard'; render(); }),
-              choice(cfg.scoring === 'all', T('全炸翻倍'), T('每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 64 倍。'), () => { cfg.scoring = 'all'; render(); }),
+              choice(cfg.scoring === 'all', T('全炸翻倍'), T('每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 256 倍。'), () => { cfg.scoring = 'all'; render(); }),
             ),
             cfg.scoring !== 'none' ? h('p', { class: 'dim', style: { fontSize: '12.5px', margin: '10px 0 0' } },
               T('倍数只影响每局结算的积分，AI 的打法不变，仍以赢下本局、多升级为目标。')) : null) : null,

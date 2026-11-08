@@ -91,7 +91,7 @@ export default {
   '只算升级': 'Levels only',
   '按升级数结算：双上 3、一三游 2、一四游 1。': 'Scored by levels gained: 3 for a double win, 2 for 1st and 3rd, 1 for 1st and 4th.',
   '底分同升级数；6 张以上炸弹、同花顺、天王炸每出一个翻一倍，封顶 16 倍。': 'Base score = levels gained; each bomb of 6+ cards, straight flush or joker bomb doubles it, up to 16×.',
-  '每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 64 倍。': 'Every bomb (incl. straight flushes and joker bombs) doubles the score, up to 64×.',
+  '每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 256 倍。': 'Every bomb (incl. straight flushes and joker bombs) doubles the score, up to 256×.',
   '倍数只影响每局结算的积分，AI 的打法不变，仍以赢下本局、多升级为目标。': 'Multipliers only change the points of each deal. The AI plays the same way, aiming to win the deal and gain levels.',
   'AI 思考方式': 'How the AI thinks',
   '神经网络': 'Neural network',

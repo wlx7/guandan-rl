@@ -45,7 +45,7 @@ const CORE = {
   '标准倍数': 'Standard multiplier',
   '6 张及以上炸弹、同花顺、天王炸每出一个翻一倍，封顶 16 倍': 'Each bomb of 6+ cards, straight flush or joker bomb doubles the score, up to 16×',
   '全炸翻倍': 'Every bomb doubles',
-  '每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 64 倍': 'Every bomb (incl. straight flushes and joker bombs) doubles the score, up to 64×',
+  '每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 256 倍': 'Every bomb (incl. straight flushes and joker bombs) doubles the score, up to 256×',
   // model sizes (model.py)
   '最快，适合 CPU 调试': 'Fastest, for debugging on a CPU',
   '轻量，CPU 也能训练': 'Light, trains on a CPU too',

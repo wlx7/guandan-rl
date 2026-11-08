@@ -18,6 +18,13 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.8.1
+
+- 手机横屏时，“等待玩家加入”界面（局域网网址、座位、二维码）一屏完整显示：以前标题和网址会被顶栏挡住，二维码和按钮被截掉。
+- 计分“全炸翻倍”的上限从 64 倍提高到 256 倍。按 AI 对局统计，每局常有 6～9 个炸弹，原来约 2/3 的牌局都顶到 64 倍，倍数几乎没有区分度；现在顶格的牌局约占四分之一。“标准倍数”（封顶 16 倍）不变。
+
+**English:** The "waiting for players" screen (LAN address, seats, QR code) now fits on a landscape phone. The cap of the "every bomb doubles" scoring is raised from 64× to 256× (about two thirds of deals used to hit 64×).
+
 ### v1.8.0
 
 - **英文界面**：首页右上角点“中文 / English”切换，默认中文，每台设备分别记住。牌桌、开桌、训练中心、规则说明、AI 提示与点评、服务器的提示信息、牌型名称都有英文；电脑版、免安装版、安卓 App 都一样（安卓通知栏也跟着切换）。

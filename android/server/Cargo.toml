@@ -1,6 +1,6 @@
 [package]
 name = "guandan_server"
-version = "1.8.0"
+version = "1.8.1"
 edition = "2021"
 description = "Guandan table server for the Android app (same web UI and protocol as the Python server)"
 license = "MIT"
