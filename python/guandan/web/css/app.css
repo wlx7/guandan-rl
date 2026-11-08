@@ -194,6 +194,10 @@ input[type=range] { width: 100%; accent-color: var(--brass); }
 .qr { background: var(--ivory); padding: 10px; border-radius: 12px; width: 180px; height: 180px; }
 .qr img { width: 100%; height: 100%; display: block; }
 .url-big { font-family: var(--num); font-size: 22px; color: var(--brass-hi); word-break: break-all; }
+/* waiting room: fills the table area below the top bar and scrolls instead of spilling over it */
+.center-msg.waiting { top: 8px; bottom: 8px; transform: translateX(-50%); display: flex; flex-direction: column; justify-content: center; }
+.wait-panel { width: min(640px, 94vw); max-height: 100%; overflow-y: auto; overscroll-behavior: contain; }
+.wait-panel .qr { justify-self: center; }
 .seat-list { display: grid; gap: 8px; margin-top: 14px; }
 .seat-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(0, 0, 0, 0.16); }
 .seat-row .pos { font-family: var(--serif); width: 3.2em; color: var(--brass-hi); }
@@ -476,6 +480,8 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .setup, .train { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .charts { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
   .wait-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {
@@ -632,6 +638,21 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .hand-bar .g { gap: 4px; }
   .board.bar-play ~ .hand-bar .sfpick .lab { display: none; }
   .board.bar-play ~ .hand-bar .sfpick { padding-left: 4px; }
+}
+@media (max-height: 520px) {
+  /* landscape phones: seats and address on the left, the QR code beside them, all on one screen */
+  .wait-panel { width: min(760px, 96vw); padding: 12px 16px; }
+  .wait-panel h2 { font-size: 17px; margin: 0 0 6px; }
+  .wait-panel .muted { font-size: 12.5px; margin-bottom: 4px; }
+  .wait-panel .url-big { font-size: 15px; }
+  .wait-panel .seat-list { gap: 4px; margin-top: 8px; }
+  .wait-panel .seat-row { padding: 5px 10px; font-size: 13.5px; }
+  .wait-panel .qr { width: min(170px, calc(100vh - 150px)); height: auto; aspect-ratio: 1; padding: 7px; align-self: center; }
+  .wait-panel .wait-grid { gap: 14px; }
+}
+@media (max-height: 360px) {
+  .wait-panel .seat-list { grid-template-columns: 1fr 1fr; }
+  .wait-panel .wait-grid > div > .muted { display: none; }
 }
 @media (max-height: 330px) {
   /* very short (a phone browser with its address bar): smaller played cards */

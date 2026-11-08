@@ -189,6 +189,7 @@ export function mountTable(app, roomId, watch) {
     const s = S.s;
     if (!s) return;
     renderTop();
+    centerMsg.classList.toggle('waiting', s.status === 'waiting');
     if (s.status === 'waiting') return renderWaiting();
     renderSeats();
     renderZones();
@@ -258,7 +259,7 @@ export function mountTable(app, roomId, watch) {
         h('span', { class: 'nm' }, st.kind === 'ai' ? tr(st.name) : (st.connected ? tr(st.name) : T('等待加入…'))),
         h('span', { class: 'dot' + (st.connected ? ' on' : '') })));
     });
-    const box = h('div', { class: 'panel', style: { width: 'min(640px, 94vw)', pointerEvents: 'auto', textAlign: 'left' } },
+    const box = h('div', { class: 'panel wait-panel', style: { pointerEvents: 'auto', textAlign: 'left' } },
       h('h2', {}, T('等待玩家加入')),
       h('div', { class: 'wait-grid' },
         h('div', {}, h('p', { class: 'muted', style: { marginTop: 0 } }, T('让朋友连接同一个 WiFi，用手机或电脑浏览器打开：')),
