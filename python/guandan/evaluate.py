@@ -120,7 +120,8 @@ def main():
     r = duplicate_match(a, b, deals=args.deals, seed=args.seed, batch=args.batch,
                         log=lambda t: print(t, flush=True))
     print(f"RESULT vs {args.opponent}: score {r['score']:+.3f} ± {r['score_se']:.3f} levels/round, "
-          f"win {r['win_rate']*100:.1f}%  ({r['deals']} deals = {r['rounds']} rounds, {r['seconds']:.0f}s)", flush=True)
+          f"win {r['win_rate']*100:.2f}% ± {r['win_rate_se']*100:.2f} pp (paired SE)  "
+          f"({r['deals']} deals = {r['rounds']} rounds, {r['seconds']:.0f}s)", flush=True)
 
 
 if __name__ == "__main__":

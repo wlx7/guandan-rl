@@ -18,6 +18,14 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.9.0
+
+- Windows 和安卓内置同一份新模型。训练时从同一副牌分出两条路径，比较两种出法的实际终局，微调原有网络的动作评分。
+- 在独立的 30,000 副复式牌上对 v1.8.2 打了 60,000 局，新版胜率 **50.695%**（按副牌估计的 95% 区间 50.42%～50.97%），平均每局多赢 0.0477 级。完整打过 A 的测试为 513 胜 / 1,024 场。
+- 训练版新增 `python -m guandan.train_pairs`。模型参数量和移动端推理次数与 v1.8.2 相同。
+
+**English.** Windows and Android ship the same fine-tuned network. On 30,000 new duplicate deals it won 50.695% of rounds against v1.8.2. See [model evaluation and training details](https://github.com/wlx7/guandan-rl/blob/v1.9.0/docs/MODEL.md).
+
 ### v1.8.2
 
 - 手机横屏明牌（教学模式“明牌”或观战）：三家的手牌改成在顶上一排下面单独占一行，左边西家、中间北家、右边东家，不再挤在各自头像下面、和出的牌叠在一起；你自己出的牌放在这一行下面，手牌区相应略缩小。电脑和竖屏不变。

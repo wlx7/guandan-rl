@@ -1,5 +1,24 @@
 # 训练说明
 
+## 用同一副牌比较两种出法
+
+普通自对弈只记录实际打出去的那手牌。成对微调会从基准模型的自对弈中抽取决策点，复制当时的整副牌，让首选动作和另一个分数接近的合法动作各走一遍。之后四个座位都按基准模型打到终局。训练标签是两条分支从出牌方看得到的级差之差。相同的底牌和后续策略使比较更容易；模型出牌时看到的仍然只有自己的手牌和公开记录。
+
+下面的命令从一份已有权重开始训练。只更新动作评分部分，保留状态编码和手牌预测头。每 16 轮保存一个候选权重，最后一轮也保存。输出目录应单独命名。
+
+```bash
+python -m guandan.train_pairs base.pt candidates/level --iterations 192
+python -m guandan.train_pairs base.pt candidates/win --initial-head candidates/level/pair-80.pt --win-weight 0.75 --iterations 48 --seed 29013 --deal-seed 281000
+```
+
+第一条命令以升降级为目标。第二条命令从第一阶段的评分头继续，把目标改为 75% 的单局胜负和 25% 的升降级。两组都使用同一份 `base.pt` 负责后续出牌。训练从随机级牌的单局开始，未覆盖进还贡决策。
+
+用复式牌筛选候选，选定后换一个从未参与筛选的种子做验收。例如下面这条命令会打 20,000 局。统计单位是同一副牌的两次换边结果，命令输出的误差为一个标准误。
+
+```bash
+python -m guandan.evaluate candidates/level/pair-80.pt --opponent base.pt --deals 10000 --batch 128 --device cuda --seed 90821
+```
+
 ## 算法：深度蒙特卡洛（DMC）纯自对弈
 
 本项目不使用任何人类对局数据或手写策略来训练，AI 完全通过和自己打牌学会掼蛋：

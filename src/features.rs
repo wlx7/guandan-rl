@@ -211,10 +211,22 @@ pub fn encode_action(g: &Game, me: u8, m: &Move, out: &mut [u8]) {
     // bombs broken by a non-bomb move
     let mut broken = 0usize;
     if !m.is_bomb() && !m.is_pass() && m.kind != Kind::Tribute {
-        let before = Info::new(hand, lv);
-        let aft = Info::new(&after, lv);
-        for r in 0..13 {
-            if before.cnt[r] >= 4 && aft.cnt[r] < 4 {
+        let wild = wild_type(lv);
+        let mut ranks = 0u16;
+        for &card in &m.cards {
+            if card >= SJ || card == wild {
+                continue;
+            }
+            let rank = rank_of(card);
+            let bit = 1 << rank;
+            if ranks & bit != 0 {
+                continue;
+            }
+            ranks |= bit;
+            let types = (0..4).map(|suit| ctype(rank, suit)).filter(|&t| t != wild);
+            let before: u8 = types.clone().map(|t| hand[t as usize]).sum();
+            let left: u8 = types.map(|t| after[t as usize]).sum();
+            if before >= 4 && left < 4 {
                 broken += 1;
             }
         }

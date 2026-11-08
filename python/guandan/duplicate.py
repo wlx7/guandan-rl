@@ -86,6 +86,7 @@ def duplicate_match(player_a, player_b, deals=200, seed=1, batch=64, log=None, m
     """Stats for player A: level change per round, round win rate and their standard errors."""
     per_deal = []  # A's level change summed over the two copies of a deal
     wins = rounds = 0
+    paired_wins = []
     t0 = time.time()
     done_deals = 0
     while done_deals < deals:
@@ -112,6 +113,7 @@ def duplicate_match(player_a, player_b, deals=200, seed=1, batch=64, log=None, m
         ra = np.where(a_team == 0, r0, -r0)
         per_deal += list(ra[0::2] + ra[1::2])
         wins += int((ra > 0).sum())
+        paired_wins.extend((ra > 0).reshape(-1, 2).mean(axis=1))
         rounds += len(ra)
         done_deals += k
         if log:
@@ -128,5 +130,6 @@ def duplicate_match(player_a, player_b, deals=200, seed=1, batch=64, log=None, m
         "score": float(pd.mean() / 2),  # per round
         "score_se": float(pd.std(ddof=1) / 2 / np.sqrt(n)) if n > 1 else 0.0,
         "win_rate": wins / max(1, rounds),
+        "win_rate_se": float(np.std(paired_wins, ddof=1) / np.sqrt(n)) if n > 1 else 0.0,
         "seconds": time.time() - t0,
     }

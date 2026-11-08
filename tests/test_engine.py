@@ -160,6 +160,7 @@ def test_duplicate_deals_cancel_for_identical_players():
     from guandan.duplicate import duplicate_match, RulePlayer, RandomPlayer
     same = duplicate_match(RulePlayer(), RulePlayer(), deals=12, batch=12)
     assert same["score"] == 0.0  # same deterministic player on both sides: every deal cancels
+    assert same["win_rate"] == 0.5 and same["win_rate_se"] == 0.0
     r = duplicate_match(RulePlayer(), RandomPlayer(1), deals=24, batch=12)
     assert r["score"] > 0.5 and r["rounds"] == 48
 
