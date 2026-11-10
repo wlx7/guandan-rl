@@ -18,6 +18,14 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.10.0
+
+- **随包模型大幅变强**：把 v1.9.0 的网络加宽成 large（参数约 2.2 倍），用云端显卡自对弈 37 亿局面，再把最后 4 个快照取平均。在 3 万副从未用过的复式牌上对 v1.9.0：每局多赢 **0.344 级，胜率 55.1%**；从 2 打到过 A 的完整比赛里赢 **70.6%**（2,049 场）。对规则 AI 胜率 91.4%。作为对比，v1.9.0 对上一版只多赢 0.048 级。
+- 电脑版、免安装版、安卓 App 都内置这个模型。模型文件从 5 MB 变成 11 MB，每步计算量约为原来的 2 倍，手机上依然很快。文件名仍是 guandan-medium.pt（兼容已有设置）。
+- 训练细节和测试方法见 docs/MODEL.md。
+
+**English.** The bundled network is now the large size: v1.9.0 widened (Net2Net), trained on 3.74 billion self-play decisions and averaged over its last four snapshots. On 30,000 unseen duplicate deals it gains +0.344 levels per round against v1.9.0 (55.1% of rounds); it wins 70.6% of 2,049 full matches (from level 2 through A, with tribute). See docs/MODEL.md.
+
 ### v1.9.1
 
 手机横屏首页的标题和“开一桌”按钮现在位于屏幕中央略偏下。语言切换保留在右上角，多张牌桌可以向下滚动查看。

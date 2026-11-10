@@ -1,16 +1,20 @@
 """Widening a trained model (Net2Net) keeps its play while adding capacity."""
-import os
 
 import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
 
-from guandan.model import PRESETS, count_params, load_checkpoint, widen, STATE_DIM, HIST_LEN, HIST_DIM, ACTION_DIM
-from guandan.paths import builtin_models_dir
+from guandan.model import PRESETS, GuandanNet, count_params, widen, STATE_DIM, HIST_LEN, HIST_DIM, ACTION_DIM
 from test_npnet import positions
 
-MODEL = os.path.join(builtin_models_dir(), "guandan-medium.pt")
+
+def medium_model():
+    """A medium network (the built-in model is large since v1.10, so widen a seeded medium one)."""
+    torch.manual_seed(0)
+    m = GuandanNet(PRESETS["medium"])
+    m.add_belief_head()
+    return m.eval()
 
 
 def q_values(model, ps):
@@ -27,8 +31,7 @@ def q_values(model, ps):
 
 @pytest.mark.parametrize("target", ["large", "xlarge"])
 def test_widen_preserves_function(target):
-    small, _ = load_checkpoint(MODEL)
-    small.add_belief_head()
+    small = medium_model()
     ps = positions(30)
     exact = widen(small, PRESETS[target])
     assert count_params(exact) > 1.9 * count_params(small)

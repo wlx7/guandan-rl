@@ -33,7 +33,7 @@ App 不访问网络上的任何服务器，不读取通讯录、位置、照片�
 ## 技术说明
 
 - `android/server`：牌桌服务器的 Rust 版。规则引擎就是根目录的 `guandan_core`；房间逻辑、计时、托管、提示与点评、权限和 HTTP / WebSocket 接口照搬 `python/guandan/server`，消息格式完全相同，所以 `python/guandan/web` 的网页界面原样使用（编译时嵌入）。神经网络推理也用 Rust 实现，和 PyTorch / numpy 的结果误差在 1e-6 以内，算一步出牌在电脑上约 2 毫秒，手机上也远快于 AI 的出牌动画。
-- 模型：`packaging/export_gdm.py` 把随包的 `guandan-medium.pt` 转成 safetensors 格式（fp16，约 5 MB）放进 APK。
+- 模型：`packaging/export_gdm.py` 把随包的 `guandan-medium.pt` 转成 safetensors 格式（fp16，约 11 MB）放进 APK。
 - `android/app`：Java 写的外壳。`MainActivity` 是全屏横屏的 WebView（用户代理带 `GuandanApp`，网页据此隐藏“全屏”按钮）；`ServerService` 是前台服务，持有 WiFi 锁和唤醒锁，显示通知。
 - 电脑上也能运行同一个服务器，方便调试：
 
