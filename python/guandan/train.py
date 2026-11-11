@@ -51,6 +51,9 @@ def build_parser():
     ap.add_argument("--device", default="auto", help="learner device: auto|cuda|cpu")
     ap.add_argument("--actor-device", default="auto", help="device for self-play inference: auto|cuda|cpu")
     ap.add_argument("--actors", type=int, default=0, help="self-play processes (0 = auto)")
+    ap.add_argument("--actor-gpus", default="",
+                    help="GPUs for self-play, e.g. '0,1,2,3' or '1,2,3' (keeps GPU 0 for learning); the self-play "
+                         "processes take them in turn. Default: every GPU of the machine")
     ap.add_argument("--envs", type=int, default=0, help="parallel matches per actor (0 = auto)")
     ap.add_argument("--batch", type=int, default=0, help="0 = auto (4096 on GPU, 512 on CPU)")
     ap.add_argument("--lr", type=float, default=0.0,
@@ -137,6 +140,9 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         dev = args["actor_device"]
         if dev == "cuda" and not torch.cuda.is_available():
             dev = "cpu"
+        gpus = args.get("actor_gpus") or []
+        if dev == "cuda" and gpus:
+            dev = f"cuda:{gpus[aid % len(gpus)]}"
         model = GuandanNet(ModelConfig(**cfg)).to(dev)
         model.eval()
         policy = BatchPolicy(model, dev)
@@ -456,6 +462,7 @@ def run(args):
     if args.actor_device == "auto":
         args.actor_device = "cuda" if torch.cuda.is_available() else "cpu"
     cpu = os.cpu_count() or 2
+    auto_actors = not args.actors
     if not args.actors:
         # GPU self-play: a few processes with many matches each saturate the GPU;
         # CPU self-play: one single-threaded process per spare core
@@ -464,7 +471,27 @@ def run(args):
         args.envs = 256 if args.actor_device == "cuda" else 64
     if not args.batch:
         args.batch = 4096 if device.startswith("cuda") else 512
+    # several GPUs: self-play spreads over all of them and feeds the one learner (on the first)
+    actor_gpus = []
+    if args.actor_device == "cuda":
+        n_gpu = torch.cuda.device_count()
+        if args.actor_gpus.strip():
+            actor_gpus = [int(x) for x in args.actor_gpus.split(",") if x.strip() != ""]
+            bad = [g for g in actor_gpus if g < 0 or g >= n_gpu]
+            if bad:
+                print(f"--actor-gpus: no GPU {bad[0]} (this machine has {n_gpu})", flush=True)
+                sys.exit(2)
+        elif n_gpu > 1:
+            actor_gpus = list(range(n_gpu))
+    n_actor_gpus = max(1, len(set(actor_gpus)))
+    if auto_actors and n_actor_gpus > 1:
+        args.actors = min(6 * n_actor_gpus, max(n_actor_gpus, cpu - 2))
+    if n_actor_gpus > 1 and args.buffer == 200_000:
+        args.buffer *= n_actor_gpus  # the same seconds of self-play as with one GPU
     lim = resource_limits(args.actor_device)
+    if n_actor_gpus > 1:
+        lim["max_actors"] = max(1, min(lim["max_actors"] * n_actor_gpus, int((lim["ram_gb"] - 6) / 1.6)))
+        lim["max_total_envs"] *= n_actor_gpus
     if args.actors > lim["max_actors"]:
         print(f"actors {args.actors} -> {lim['max_actors']} (limited by GPU memory / RAM)", flush=True)
         args.actors = lim["max_actors"]
@@ -543,7 +570,7 @@ def run(args):
                  base=args.base, league=args.league, run_dir=run_dir,
                  pool=[p for p in args.pool.split(";") if p.strip()],
                  search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp,
-                 td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k)
+                 td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus)
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
@@ -588,7 +615,9 @@ def run(args):
     sync_every = 10
     n_updates = 0
     print(f"training {args.name}: preset={cfg.preset} params={count_params(model):,} device={device} "
-          f"actors={args.actors}x{args.envs} on {args.actor_device} batch={args.batch} lr={opt.param_groups[0]['lr']:g}", flush=True)
+          f"actors={args.actors}x{args.envs} on {args.actor_device}"
+          f"{' (GPUs ' + ','.join(map(str, actor_gpus)) + ')' if len(actor_gpus) > 1 else ''} "
+          f"batch={args.batch} lr={opt.param_groups[0]['lr']:g}", flush=True)
 
     interrupted = {"flag": False}
 
