@@ -12,6 +12,8 @@ struct Step {
     hist: Vec<u8>,
     action: Vec<u8>,
     hidden: Vec<u8>,
+    /// The network's value of the chosen move, in levels (only used when td_lambda < 1).
+    q: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -41,6 +43,9 @@ pub struct VecEnv {
     learners: Vec<[bool; 4]>,
     rng: Rng,
     random_levels: bool,
+    /// 1.0 = Monte-Carlo targets (the round outcome). Below 1, each sample's target mixes the
+    /// outcome with the network's own value at the same player's later decisions (TD(lambda)).
+    td_lambda: f32,
 }
 
 impl VecEnv {
@@ -71,7 +76,13 @@ impl VecEnv {
             learners: vec![[true; 4]; n],
             rng,
             random_levels,
+            td_lambda: 1.0,
         }
+    }
+
+    /// Set the TD(lambda) mixing of training targets (see `step_q`). 1.0 = round outcome only.
+    pub fn set_td_lambda(&mut self, lambda: f32) {
+        self.td_lambda = lambda.clamp(0.0, 1.0);
     }
 
     fn randomize_levels(rng: &mut Rng, g: &mut Game) {
@@ -148,6 +159,17 @@ impl VecEnv {
     }
 
     pub fn step(&mut self, choices: &[u32], record: bool) -> Vec<RoundInfo> {
+        self.step_q(choices, None, record)
+    }
+
+    /// Like `step`; `q[i]` is the network's value (in levels, from the mover's side) of the
+    /// move chosen in environment `i`. With td_lambda < 1 the target of a sample is the
+    /// lambda-return along the same player's later decisions of the round:
+    /// `target_k = (1 - lambda) * q_{k+1} + lambda * target_{k+1}`, and the round outcome at
+    /// the player's last decision. A player's later observations contain the earlier ones, so
+    /// its later values are unbiased estimates of the earlier ones; they vary far less than
+    /// the outcome of the round.
+    pub fn step_q(&mut self, choices: &[u32], q: Option<&[f32]>, record: bool) -> Vec<RoundInfo> {
         let mut results = Vec::new();
         for i in 0..self.len() {
             self.refresh(i);
@@ -166,6 +188,7 @@ impl VecEnv {
                     } else {
                         vec![]
                     },
+                    q: q.map_or(0.0, |v| v[i]),
                 });
             }
             let mv = self.moves[i][c].clone();
@@ -177,11 +200,25 @@ impl VecEnv {
                 let r = g.last_result.as_ref().unwrap();
                 results.push(RoundInfo { env: i, win_team: r.win_team, gain: r.gain, match_over: r.match_over });
                 let rew = [g.round_reward(0), g.round_reward(1)];
-                for st in self.traj[i].drain(..) {
+                let lam = self.td_lambda;
+                let n_steps = self.traj[i].len();
+                let mut targets = vec![0f32; n_steps];
+                let mut next: [Option<(f32, f32)>; 4] = [None; 4]; // (target, q) of the player's next decision
+                for k in (0..n_steps).rev() {
+                    let st = &self.traj[i][k];
+                    let p = st.player as usize;
+                    let t = match next[p] {
+                        Some((nt, nq)) if lam < 1.0 => (1.0 - lam) * nq + lam * nt,
+                        _ => rew[team(st.player) as usize],
+                    };
+                    targets[k] = t;
+                    next[p] = Some((t, st.q));
+                }
+                for (k, st) in self.traj[i].drain(..).enumerate() {
                     self.out_s.extend_from_slice(&st.state);
                     self.out_h.extend_from_slice(&st.hist);
                     self.out_a.extend_from_slice(&st.action);
-                    self.out_t.push(rew[team(st.player) as usize]);
+                    self.out_t.push(targets[k]);
                     if self.record_hidden {
                         self.out_x.extend_from_slice(&st.hidden);
                     }

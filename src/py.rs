@@ -70,6 +70,26 @@ impl PyVecEnv {
             .collect())
     }
 
+    /// Like `step` with recording; `q[i]` is the network's value (in levels) of the chosen
+    /// move. Used for TD(lambda) targets, see `set_td_lambda`.
+    fn step_q(&mut self, choices: Vec<u32>, q: Vec<f32>) -> PyResult<Vec<(usize, u8, u8, bool)>> {
+        if choices.len() != self.inner.len() || q.len() != self.inner.len() {
+            return Err(PyValueError::new_err("choices / q length mismatch"));
+        }
+        Ok(self
+            .inner
+            .step_q(&choices, Some(&q), true)
+            .into_iter()
+            .map(|r| (r.env, r.win_team, r.gain, r.match_over))
+            .collect())
+    }
+
+    /// 1.0 (default): training targets are round outcomes. Below 1: lambda-returns that mix
+    /// the outcome with the values passed to `step_q` at the same player's later decisions.
+    fn set_td_lambda(&mut self, lambda: f32) {
+        self.inner.set_td_lambda(lambda);
+    }
+
     fn rule_choices(&mut self) -> Vec<u32> {
         self.inner.rule_choices()
     }

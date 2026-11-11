@@ -68,9 +68,10 @@ class BatchPolicy:
         return q.float().cpu().numpy()
 
     def choose(self, s, h, a, off, epsilon=0.0, rng: np.random.Generator | None = None,
-               top_k=0, epsilon_top=0.0) -> np.ndarray:
+               top_k=0, epsilon_top=0.0, return_q=False):
         """Greedy choice with exploration: with probability `epsilon_top` a random move among the
-        network's `top_k` best, and with probability `epsilon` a uniformly random legal move."""
+        network's `top_k` best, and with probability `epsilon` a uniformly random legal move.
+        With `return_q` also returns the network's value of each chosen move."""
         q = self.q_values(s, h, a, off)
         ch = segment_argmax(q, off)
         if epsilon > 0 or (epsilon_top > 0 and top_k > 1):
@@ -88,6 +89,8 @@ class BatchPolicy:
             explore = u < epsilon
             if explore.any():
                 ch[explore] = (rng.random(explore.sum()) * n[explore]).astype(np.int64)
+        if return_q:
+            return ch, q[off[:-1] + ch]
         return ch
 
 

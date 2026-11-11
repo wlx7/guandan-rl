@@ -56,6 +56,12 @@ def build_parser():
     ap.add_argument("--lr", type=float, default=0.0,
                     help="learning rate; 0 = auto: 2e-4 from scratch, 5e-5 when continuing from a trained model")
     ap.add_argument("--epsilon", type=float, default=0.02, help="share of random exploration moves")
+    ap.add_argument("--epsilon-top", type=float, default=0.0,
+                    help="share of exploration moves drawn from the network's --top-k best moves")
+    ap.add_argument("--top-k", type=int, default=3, help="number of best moves --epsilon-top chooses among")
+    ap.add_argument("--td-lambda", type=float, default=1.0,
+                    help="1 = targets are round outcomes (Monte Carlo); below 1 = TD(lambda): mix the outcome "
+                         "with the network's value at the same player's later decisions")
     ap.add_argument("--league", type=float, default=0.0,
                     help="share of rounds whose opponents are an earlier model from the pool (0 = pure self-play)")
     ap.add_argument("--pool", default="", help="extra checkpoints for the opponent pool, separated by ';'")
@@ -138,6 +144,11 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
         aux = float(args.get("aux", 0.0)) > 0
         env.set_record_hidden(aux)
+        td_lambda = float(args.get("td_lambda", 1.0))
+        use_td = td_lambda < 1.0
+        if use_td:
+            env.set_td_lambda(td_lambda)
+        eps_top, top_k = float(args.get("epsilon_top", 0.0)), int(args.get("top_k", 3))
         rng = np.random.default_rng(args["seed"] * 100 + aid + int(time.time()))
         league = float(args.get("league", 0.0))
         pool: dict[str, BatchPolicy] = {}
@@ -203,9 +214,14 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                     rows = np.asarray([i for i in np.nonzero(old)[0] if opp[i] == p], np.int64)
                     ss, hh, aa, oo = subset_obs(s, h, a, off, rows)
                     ch[rows] = pool[p].choose(ss, hh, aa, oo)
+                res = env.step(ch.tolist(), True)
+            elif use_td:
+                # targets are in levels; the network predicts levels / 3
+                ch, qc = policy.choose(s, h, a, off, args["epsilon"], rng, top_k, eps_top, return_q=True)
+                res = env.step_q(ch.tolist(), (qc * 3.0).tolist())
             else:
-                ch = policy.choose(s, h, a, off, args["epsilon"], rng)
-            res = env.step(ch.tolist(), True)
+                ch = policy.choose(s, h, a, off, args["epsilon"], rng, top_k, eps_top)
+                res = env.step(ch.tolist(), True)
             for (i, _w, _g, _m) in res:
                 if league > 0:
                     assign(i)
@@ -416,6 +432,9 @@ def other_active_runs(exclude=None):
 def run(args):
     from .proc import run_alive, write_pid, remove_pid, resource_limits
     args.name = safe_run_name(args.name) or time.strftime("run-%Y%m%d-%H%M%S")
+    if args.td_lambda < 1.0 and args.league > 0:
+        print("--td-lambda below 1 cannot be combined with --league", flush=True)
+        sys.exit(2)
     run_dir = os.path.join(runs_dir(), args.name)
     os.makedirs(run_dir, exist_ok=True)
     if run_alive(run_dir):
@@ -523,7 +542,8 @@ def run(args):
                  eval_interval=args.eval_interval, eval_rounds=args.eval_rounds, eval_threads=args.eval_threads,
                  base=args.base, league=args.league, run_dir=run_dir,
                  pool=[p for p in args.pool.split(";") if p.strip()],
-                 search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp)
+                 search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp,
+                 td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k)
     procs = []
     for i in range(args.actors):
         p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
