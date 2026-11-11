@@ -18,6 +18,13 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.10.1
+
+- **随包模型继续变强**：接着 v1.10.0 的网络再自对弈 15 亿局面（共 53 亿），仍取最后 4 个快照的平均。在 3 万副从未用过的复式牌上对 v1.10.0：每局多赢 **0.057 级，胜率 51.3%**；完整比赛（从 2 打到过 A）赢 52.7%（2,048 场）。对 v1.9.0 每局多赢 0.408 级（v1.10.0 为 0.344），对规则 AI 胜率 91.8%。
+- 模型大小和速度与 v1.10.0 相同（11 MB），电脑版、免安装版、安卓 App 都已内置。
+
+**English.** The bundled network trained on for another 1.5 billion self-play decisions (5.28 billion in total), again averaged over its last four snapshots. On 30,000 unseen duplicate deals it gains +0.057 levels per round against v1.10.0 (51.3% of rounds) and wins 52.7% of 2,048 full matches. Same size and speed as v1.10.0. See docs/MODEL.md.
+
 ### v1.10.0
 
 - **随包模型大幅变强**：把 v1.9.0 的网络加宽成 large（参数约 2.2 倍），用云端显卡自对弈 37 亿局面，再把最后 4 个快照取平均。在 3 万副从未用过的复式牌上对 v1.9.0：每局多赢 **0.344 级，胜率 55.1%**；从 2 打到过 A 的完整比赛里赢 **70.6%**（2,049 场）。对规则 AI 胜率 91.4%。作为对比，v1.9.0 对上一版只多赢 0.048 级。
