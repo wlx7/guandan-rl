@@ -18,6 +18,16 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.10.3
+
+手机横屏牌桌不再那么挤：
+
+- 上方三位玩家那一排和顶栏之间留出了空隙（屏幕越高留得越多，很矮的屏幕保持原样）。
+- “头游 / 二游 / 三游”的标记改到头像旁边、原来显示剩余张数的位置，不再盖住头像和顶栏的按钮。
+- 牌桌中间的提示改成一行小字，最多同时显示两条，不再叠成三行挡住牌。
+
+On landscape phones the row of players sits a little below the top bar, the finishing badges stand beside the avatars instead of over them, and notices take a single line.
+
 ### v1.10.2
 
 - **随包模型又变强了**：同一个网络继续自对弈到 79 亿局面，仍取最后 4 个快照的平均。在 3 万副从未用过的复式牌上对 v1.10.1：每局多赢 **0.070 级**（胜率 51.0%），完整比赛（从 2 打到过 A）赢 53.3%（2,048 场）。对 v1.9.0 每局多赢 0.485 级，对规则 AI 胜率 92.4%。

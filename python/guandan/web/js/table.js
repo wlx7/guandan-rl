@@ -313,11 +313,15 @@ export function mountTable(app, roomId, watch) {
       S.badges = S.badges || new Set();
       const justDone = place >= 0 && !S.badges.has(bkey);
       if (place >= 0) S.badges.add(bkey);
-      if (place >= 0) av.appendChild(h('span', { class: 'badge' + (place === 0 ? ' p1' : '') + (justDone ? ' new' : '') }, T(PLACE[place])));
+      // landscape phones: the badge takes the place of the card count (a finished player has no
+      // cards left) instead of sticking out over the avatar and the top bar
+      const inlineBadge = band && r !== 0 && place >= 0;
+      const badge = place >= 0 ? h('span', { class: 'badge' + (place === 0 ? ' p1' : '') + (justDone ? ' new' : '') + (inlineBadge ? ' inline' : '') }, T(PLACE[place])) : null;
+      if (badge && !inlineBadge) av.appendChild(badge);
       const cnt = s.counts[p];
       const info = h('div', { class: 'info' },
         h('div', { class: 'nm', title: tr(st.name) }, tr(st.name) + (r === 0 && you() >= 0 && st.name !== '我' ? T('（你）') : '')),
-        r === 0 ? null : h('div', { class: 'count' + (cnt > 0 && cnt <= 6 ? ' low' : '') }, h('i', { class: 'cb' }), String(cnt)),
+        r === 0 ? null : inlineBadge ? badge : h('div', { class: 'count' + (cnt > 0 && cnt <= 6 ? ' low' : '') }, h('i', { class: 'cb' }), String(cnt)),
         st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, s.paused || s.status !== 'playing' ? T('离线') : T('离线 · AI 托管')) : null);
       const kids = [av, info];
       const vis = s.hands[String(p)];
@@ -516,6 +520,8 @@ export function mountTable(app, roomId, watch) {
     let sy = ch * 0.34;
     // leave the table enough room to show everyone's plays (two bands of played cards on phones)
     let boardMin = short ? 112 : 220;
+    // landscape phones: the band of players may sit a little below the top bar (see --band)
+    if (compactMQ.matches) boardMin += Math.max(0, seatEls[2].offsetTop - 6);
     // landscape phones with open hands: the table also holds the band of open hands, and your own
     // play goes below it (the hand gets a little smaller instead of the band covering it)
     if (compactMQ.matches && board.classList.contains('revealed') && openEl.offsetHeight) {
