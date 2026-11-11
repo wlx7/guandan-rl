@@ -637,9 +637,11 @@ table.evals td:first-child, table.evals th:first-child { text-align: left; }
   .hint-row .mini { display: none; }
   .hint-row .bar { height: 3px; }
   /* notices in the middle of the table, small, instead of over the left player */
-  /* one line of at most two notices, in the gap between the band of players and your own play */
-  body.in-game .toast-layer { top: calc(var(--pch) + 58px); left: 50%; transform: translateX(-50%); display: flex; flex-wrap: nowrap; justify-content: center; gap: 6px; width: max-content; max-width: 92vw; }
-  body.in-game .toast { font-size: 12.5px; padding: 3px 11px; line-height: 1.45; white-space: nowrap; border-radius: 999px; }
+  /* at most two short notices, to the left of your own play in the row just above your hand:
+     no cards are ever drawn there (--toast-bottom is measured by the table) */
+  body.in-game .toast-layer { top: auto; bottom: var(--toast-bottom, 46%); left: auto; right: calc(50% + 104px); transform: none; display: grid; justify-items: end; gap: 3px;
+    width: max-content; max-width: calc(50vw - 104px - max(8px, env(safe-area-inset-left))); }
+  body.in-game .toast { font-size: 12.5px; padding: 2px 10px; line-height: 1.45; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; border-radius: 999px; }
   body.in-game .toast:nth-last-child(n+3) { display: none; }
   /* setup: the start button stays in view while scrolling the options */
   .start-row { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: 10px; z-index: 20; margin: 0 !important; }

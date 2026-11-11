@@ -18,13 +18,19 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.10.4
+
+手机横屏：牌桌上的提示（“接风”“某某出完了”等）移到你出的牌的左边、手牌上方那一行的空位，不再挡住任何牌。v1.10.3 里它们仍会压住你刚出的牌。
+
+On landscape phones, notices now appear to the left of your own play, in the row above your hand, where no cards are drawn.
+
 ### v1.10.3
 
 手机横屏牌桌不再那么挤：
 
 - 上方三位玩家那一排和顶栏之间留出了空隙（屏幕越高留得越多，很矮的屏幕保持原样）。
 - “头游 / 二游 / 三游”的标记改到头像旁边、原来显示剩余张数的位置，不再盖住头像和顶栏的按钮。
-- 牌桌中间的提示改成一行小字，最多同时显示两条，不再叠成三行挡住牌。
+- 牌桌中间的提示改成小字，最多同时显示两条（位置在 v1.10.4 又调整过）。
 
 On landscape phones the row of players sits a little below the top bar, the finishing badges stand beside the avatars instead of over them, and notices take a single line.
 

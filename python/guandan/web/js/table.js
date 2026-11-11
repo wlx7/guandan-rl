@@ -354,6 +354,16 @@ export function mountTable(app, roomId, watch) {
     const R = span(seatEls[1]);
     if (L.width) zl.style.left = `${Math.round(L.right - br.left + 8)}px`;
     if (R.width) zr.style.right = `${Math.round(br.right - R.left + 8)}px`;
+    placeToasts();
+  }
+
+  // landscape phones: notices go to the left of your own play, in the row just above your hand.
+  // Nothing else is drawn there: the other players' plays are in the band at the top and the
+  // hand starts below the table.
+  function placeToasts() {
+    if (!compactMQ.matches) { document.body.style.removeProperty('--toast-bottom'); return; }
+    const br = board.getBoundingClientRect();
+    document.body.style.setProperty('--toast-bottom', `${Math.max(0, Math.round(window.innerHeight - br.bottom + 2))}px`);
   }
 
   function renderZones() {
@@ -617,6 +627,7 @@ export function mountTable(app, roomId, watch) {
     });
     hand.replaceChildren(...els);
     S.layout = { cw, ch };
+    placeToasts();  // the hand's height decides where the table ends
   }
 
   // drag-select
