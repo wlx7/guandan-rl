@@ -18,6 +18,14 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.10.5
+
+- **新的训练方法，随包模型继续变强**：训练时每一手牌的学习目标不再只看“这一局最后的结果”，而是掺入同一个玩家稍后几手时网络自己的估值（TD(λ)，λ = 0.9），目标的噪声小了很多。用它从 v1.10.2 再练 12 亿局面，在 3 万副从未用过的复式牌上对 v1.10.2 每局多赢 **0.058 级**；和用原方法练了同样多局面的模型直接对打，每局多赢 0.026 级——同样的训练量，进步将近多一倍。对 v1.9.0 每局多赢 0.514 级。
+- 这一版多赢的主要是级数（赢的时候升得更多），单局胜率只略高（50.7%）；完整比赛 2,049 场赢 51.3%。
+- 训练版新增 `--td-lambda`（默认 1，即原来的方法）。模型大小和速度不变。
+
+**English.** Training targets can now be TD(λ) returns (`--td-lambda`): each decision's target mixes the round outcome with the network's own value at the same player's later decisions, which is far less noisy. Continued from v1.10.2 for 1.2 billion decisions with λ = 0.9, the bundled model gains +0.058 levels per round against v1.10.2 on 30,000 unseen duplicate deals, and +0.026 against a model trained equally long the old way. See docs/TRAINING.md.
+
 ### v1.10.4
 
 手机横屏：牌桌上的提示（“接风”“某某出完了”等）移到你出的牌的左边、手牌上方那一行的空位，不再挡住任何牌。v1.10.3 里它们仍会压住你刚出的牌。
