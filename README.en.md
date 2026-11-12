@@ -66,8 +66,8 @@ The installer's output is saved in `install_log.txt`. To upgrade when a new vers
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install torch                      # 按 https://pytorch.org 选择合适的 CUDA 版本
-pip install guandan_rl-*.whl           # 从 Releases 下载对应平台的 wheel
+pip install torch                      # pick the CUDA build for your GPU at https://pytorch.org
+pip install guandan_rl-*.whl           # the wheel for your platform from Releases
 guandan serve
 ```
 
@@ -118,70 +118,46 @@ python -m guandan.train --name main --preset medium
 ### Command-line overview
 
 ```
-guandan serve [--port 8000]         启动界面（默认监听所有网卡，供局域网访问）
-guandan train ...                   训练（参数见 python -m guandan.train -h）
-guandan eval model.pt --opponent rule --rounds 2000
-guandan info                        显示 GPU、模型大小预设和已有模型
+guandan serve [--port 8000]         start the UI (listens on all network interfaces, for LAN play)
+guandan train ...                   train (options: python -m guandan.train -h)
+guandan eval model.pt --opponent rule --rounds 2000    evaluate a model
+guandan info                        show the GPU, model-size presets and existing models
 ```
-
-(`serve` starts the UI, listening on all network interfaces by default for LAN access; `train` trains, with options shown by `python -m guandan.train -h`; `eval` evaluates a model; `info` shows the GPU, model-size presets and existing models.)
 
 Data (training records, model library) is saved in `~/guandan_data` by default; the one-click Windows install keeps it in the `guandan_data` folder of the install folder, and the portable version keeps it in the `guandan_data` folder next to the exe. You can change this with the `GUANDAN_HOME` environment variable.
 
 ## Project structure
 
 ```
-src/                 Rust 规则引擎（PyO3 扩展 guandan._core）
-  cards.rs           牌、级牌、逢人配、随机数
-  moves.rs           牌型识别（含逢人配的所有解释）与合法出牌生成
-  game.rs            整场比赛状态机：发牌、进贡还贡抗贡、接风、升级、过 A
-  features.rs        观测编码（只用当前玩家可见的信息）
-  venv.rs            批量环境（自对弈与评估）
-  bot.rs             规则 AI（只用于评估，不参与训练）
+src/                 Rust rules engine (PyO3 extension guandan._core)
+  cards.rs           cards, level rank, wild card, random numbers
+  moves.rs           hand types (every interpretation with wild cards) and legal moves
+  game.rs            whole-match state machine: dealing, tribute / return / resisting, jie feng, level-ups, passing A
+  features.rs        observation encoding (only what the current player can see)
+  venv.rs            batched environment (self-play and evaluation)
+  endgame.rs         exact endgame solver (endgame search)
+  bot.rs             rule-based AI (evaluation only, not used in training)
 python/guandan/
-  model.py           Q 网络与模型大小预设
-  train.py           DMC 自对弈训练（多进程 actor + GPU learner + 评估进程）
-  evaluate.py        对战评估
-  agents.py          推理封装
-  server/            FastAPI + WebSocket 对战服务器与训练管理
-  web/               前端（原生 JS，无需构建）
-android/server/      安卓版的牌桌服务器（Rust：房间逻辑、HTTP/WebSocket、网络推理，与 Python 版协议相同）
-android/app/         安卓外壳（全屏 WebView + 前台服务）
-scripts/             Windows 一键安装 / 启动 / 训练脚本
-tests/               Rust 与 Python 测试
+  model.py           Q-network and model-size presets
+  train.py           DMC self-play training (actor processes + GPU learner + evaluator)
+  evaluate.py        head-to-head evaluation
+  agents.py          inference wrapper (network + endgame search)
+  server/            FastAPI + WebSocket game server and training management
+  web/               front end (vanilla JS, no build step)
+android/server/      table server of the Android app (Rust: rooms, HTTP/WebSocket, network inference; same protocol as the Python server)
+android/app/         Android shell (full-screen WebView + foreground service)
+scripts/             Windows one-click install / start / training scripts
+tests/               Rust and Python tests
 ```
-
-Annotations for the tree above:
-
-- `src/`: Rust rules engine (PyO3 extension `guandan._core`)
-  - `cards.rs`: cards, level rank, wild card, random numbers
-  - `moves.rs`: hand-type recognition (including every interpretation with wild cards) and legal-move generation
-  - `game.rs`: whole-match state machine: dealing, tribute / return tribute / resisting tribute, jie feng, level-ups, passing A
-  - `features.rs`: observation encoding (uses only information visible to the current player)
-  - `venv.rs`: batched environment (self-play and evaluation)
-  - `bot.rs`: rule-based AI (used only for evaluation, not for training)
-- `python/guandan/`
-  - `model.py`: Q-network and model-size presets
-  - `train.py`: DMC self-play training (multi-process actors + GPU learner + evaluation process)
-  - `evaluate.py`: head-to-head evaluation
-  - `agents.py`: inference wrapper
-  - `server/`: FastAPI + WebSocket game server and training management
-  - `web/`: front end (vanilla JS, no build step)
-- `android/server/`: table server for the Android version (Rust: room logic, HTTP/WebSocket, network inference; same protocol as the Python version)
-- `android/app/`: Android shell (full-screen WebView + foreground service)
-- `scripts/`: Windows one-click install / start / training scripts
-- `tests/`: Rust and Python tests
 
 For more technical detail see the [architecture notes (in Chinese)](docs/ARCHITECTURE.md).
 
 ## Tests
 
 ```bash
-cargo test --release --no-default-features   # 规则引擎
-pytest tests                                  # 绑定、训练环境、服务器与 WebSocket 对局
+cargo test --release --no-default-features   # rules engine and endgame solver
+pytest tests                                  # bindings, training environment, server and WebSocket games
 ```
-
-(The first command tests the rules engine; the second tests the bindings, training environment, server and WebSocket games.)
 
 ## License
 

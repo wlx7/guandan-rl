@@ -135,12 +135,13 @@ src/                 Rust 规则引擎（PyO3 扩展 guandan._core）
   game.rs            整场比赛状态机：发牌、进贡还贡抗贡、接风、升级、过 A
   features.rs        观测编码（只用当前玩家可见的信息）
   venv.rs            批量环境（自对弈与评估）
+  endgame.rs         残局精确求解（残局搜索）
   bot.rs             规则 AI（只用于评估，不参与训练）
 python/guandan/
   model.py           Q 网络与模型大小预设
   train.py           DMC 自对弈训练（多进程 actor + GPU learner + 评估进程）
   evaluate.py        对战评估
-  agents.py          推理封装
+  agents.py          推理封装（网络 + 残局搜索）
   server/            FastAPI + WebSocket 对战服务器与训练管理
   web/               前端（原生 JS，无需构建）
 android/server/      安卓版的牌桌服务器（Rust：房间逻辑、HTTP/WebSocket、网络推理，与 Python 版协议相同）
