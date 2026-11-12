@@ -18,6 +18,15 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.11.0
+
+- **随包模型明显变强**：在 v1.10.5 的基础上又自对弈约 99 亿局面（总计 191 亿），并改进了训练时的探索方式（少走完全随机的牌，多在网络认为最好的几手里试）。在 3 万副从未用过的复式牌上，对 v1.10.5 每局多赢 **0.161 级**，单局胜率 **52.96%**；对 v1.9.0 每局多赢 0.661 级（胜率 60.4%），对规则 AI 胜率 92.9%。打完整比赛（从 2 打到过 A），2,048 场里赢 **58.3%**。
+- **新增残局搜索**：一局快结束时（四家手里合计剩 20 张以内），AI 会按网络对别家手牌的判断抽样多种可能的牌局，在每一种里把所有出法精确算到本局结束，选平均最好的一手。实测每局再多赢约 0.02～0.03 级（主要是升级更多），每步最多多想零点几秒。电脑版、免安装版和安卓版都已加入，无需设置。
+- **“深度思考”换成更强的残局搜索**（剩 24 张时开始、抽样更多牌局）。原来的推演搜索在现在的网络上反而每局输 1.5 级以上，已不再用于对局。
+- 模型大小和格式不变（仍是 large，11 MB）；安卓模型文件多带了约 0.5 MB 的手牌预测权重，供残局搜索使用。
+
+**English.** The bundled model continued from v1.10.5 for about 9.9 billion more self-play decisions (19.1 billion in total) with a better exploration scheme; on 30,000 unseen duplicate deals it gains +0.161 levels per round against v1.10.5 (52.96% of rounds) and wins 58.3% of 2,048 complete matches. New exact endgame search: with at most 20 cards left the AI samples deals of the hidden cards from the network's belief and solves every move exactly to the end of the round (+0.02 to +0.03 levels per round). Deep-think mode now uses a larger endgame search instead of the old play-out search, which loses to the plain network. See docs/MODEL.md.
+
 ### v1.10.5
 
 - **新的训练方法，随包模型继续变强**：训练时每一手牌的学习目标不再只看“这一局最后的结果”，而是掺入同一个玩家稍后几手时网络自己的估值（TD(λ)，λ = 0.9），目标的噪声小了很多。用它从 v1.10.2 再练 12 亿局面，在 3 万副从未用过的复式牌上对 v1.10.2 每局多赢 **0.058 级**；和用原方法练了同样多局面的模型直接对打，每局多赢 0.026 级——同样的训练量，进步将近多一倍。对 v1.9.0 每局多赢 0.514 级。
