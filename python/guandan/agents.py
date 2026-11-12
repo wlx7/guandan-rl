@@ -94,11 +94,20 @@ class BatchPolicy:
         return ch
 
 
+# exact endgame search when playing (see endgame.rs / endgame.py): once at most `cards` cards
+# are left, `worlds` deals of the hidden cards are sampled from the network's belief and every
+# legal move is solved exactly in each; measured +0.03 levels/round (20,16) and +0.045 (24,32)
+ENDGAME_FAST = {"cards": 20, "worlds": 16, "floor": 0.02, "max_nodes": 400_000}
+ENDGAME_DEEP = {"cards": 24, "worlds": 32, "floor": 0.02, "max_nodes": 150_000}
+
+
 class GameAgent:
     """Wraps a model for single-game decisions in the battle server. Without PyTorch the
-    network runs in numpy (portable build); look-ahead search then is not available."""
+    network runs in numpy (portable build); the play-out search then is not available, the
+    endgame search (Rust) is."""
 
-    def __init__(self, path_or_model, device="cpu", search: dict | None = None):
+    def __init__(self, path_or_model, device="cpu", search: dict | None = None, endgame: dict | None = None):
+        self.endgame = endgame
         self.numpy = torch is None
         if isinstance(path_or_model, str):
             if self.numpy:
@@ -146,8 +155,43 @@ class GameAgent:
         z = self.model.encode_state(st, ht).expand(n, -1)
         return self.model.score(z, at).float().cpu().numpy()
 
+    def _belief_expect(self, game):
+        """The network's expected copies of every card type in the other three hands (162
+        values, see Game.determinize_weighted), or None without a belief head."""
+        s, h, _a, _n = game.encode()
+        if self.numpy:
+            if getattr(self.model, "belief", None) is None:
+                return None
+            st = np.frombuffer(bytes(s), np.uint8).reshape(1, STATE_DIM)
+            ht = np.frombuffer(bytes(h), np.uint8).reshape(1, HIST_LEN, HIST_DIM)
+            lg = np.asarray(self.model.belief_logits(self.model.encode_state(st, ht)), np.float64)
+        else:
+            if not getattr(self.model.cfg, "belief", False):
+                return None
+            with torch.no_grad():
+                d = self.device
+                st = torch.frombuffer(bytearray(s), dtype=torch.uint8).view(1, STATE_DIM).to(d).float()
+                ht = torch.frombuffer(bytearray(h), dtype=torch.uint8).view(1, HIST_LEN, HIST_DIM).to(d).float()
+                lg = self.model.belief_logits(self.model.encode_state(st, ht)).float().cpu().numpy().astype(np.float64)
+        p = (1.0 / (1.0 + np.exp(-lg))).reshape(3, 54, 2)
+        return (p[..., 0] + np.minimum(p[..., 1], p[..., 0])).reshape(162).tolist()
+
     def choose(self, game):
-        return self.evaluate(game)[0][0]
+        ev = self.evaluate(game)
+        best = ev[0][0]
+        eg = self.endgame
+        if eg and len(ev) > 1 and game.phase == 1 and game.cards_left() <= eg["cards"]:
+            try:
+                moves = game.legal_moves()
+                net = next(i for i, m in enumerate(moves) if m[0] == best[0] and m[1] == best[1] and list(m[2]) == list(best[2]))
+                i = game.endgame_choose(net, self._belief_expect(game), cards=eg["cards"], worlds=eg["worlds"],
+                                        floor=eg.get("floor", 0.02), max_nodes=eg.get("max_nodes", 400_000),
+                                        seed=random.getrandbits(63))
+                if i is not None:
+                    return moves[i]
+            except Exception:
+                pass  # the network's move is always a safe fallback
+        return best
 
 
 def random_move(game, allow_pass=False):

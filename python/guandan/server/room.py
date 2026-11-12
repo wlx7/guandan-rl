@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .. import _core
 from .. import scoring
-from ..agents import GameAgent, random_move
+from ..agents import GameAgent, random_move, ENDGAME_FAST, ENDGAME_DEEP
 
 PHASE_RETURN, PHASE_PLAY, PHASE_ROUND_OVER, PHASE_MATCH_OVER = 0, 1, 2, 3
 KIND_PASS, KIND_TRIBUTE = 0, 11
@@ -24,10 +24,14 @@ SEARCH_SETTINGS = {"top_k": 5, "samples": 24, "depth": 14}
 
 
 def get_agent(path: str, think: str = "fast") -> GameAgent:
+    # both modes play the network's move and switch to the exact endgame search near the end of
+    # a round; "deep" searches earlier and with more sampled deals. (The play-out search of
+    # SEARCH_SETTINGS loses to the plain network once the network is strong, so it is no longer
+    # used when playing.)
     key = (path, think)
     if key not in _agents:
-        search = dict(SEARCH_SETTINGS) if think == "deep" else None
-        _agents[key] = GameAgent(path, "cpu", search=search)
+        eg = ENDGAME_DEEP if think == "deep" else ENDGAME_FAST
+        _agents[key] = GameAgent(path, "cpu", endgame=dict(eg))
     return _agents[key]
 
 

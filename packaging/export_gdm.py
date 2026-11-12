@@ -2,8 +2,9 @@
 
 The format is safetensors (8-byte little-endian header length, JSON header, raw tensors) with
 float16 tensors, which is how the built-in model is stored anyway, so nothing is lost. Only the
-tensors used to play are kept (LSTM, state MLP, Q head); the training-only belief head is
-dropped. The network config is in the header's __metadata__.
+tensors used to play are kept (LSTM, state MLP, Q head and the belief head, which the endgame
+search samples the hidden hands from); other training-only heads are dropped. The network
+config is in the header's __metadata__.
 
     python packaging/export_gdm.py python/guandan/models/guandan-medium.pt out.gdm
 
@@ -19,7 +20,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
 from guandan.ptload import load_pt  # noqa: E402
 
-KEEP = ("lstm.", "state_mlp.", "head.")
+KEEP = ("lstm.", "state_mlp.", "head.", "belief.")
 
 
 def export(src, dst):

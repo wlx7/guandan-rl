@@ -646,10 +646,13 @@ async fn think<T: Send + 'static>(ctx: &Arc<Ctx>, f: impl FnOnce() -> T + Send +
 }
 
 async fn ai_move(room: &RoomRef, ctx: &Arc<Ctx>) -> Move {
-    let g = lock(room).game.clone();
+    let (g, deep) = {
+        let r = lock(room);
+        (r.game.clone(), r.think == "deep")
+    };
     let net = ctx.net.clone();
     let g2 = g.clone();
-    match think(ctx, move || agent::choose(&net, &g2)).await {
+    match think(ctx, move || agent::choose(&net, &g2, deep)).await {
         Some(m) => m,
         None => agent::rule_move(&g),
     }
@@ -737,13 +740,13 @@ async fn human_turn(room: &RoomRef, ctx: &Arc<Ctx>, p: usize, rx: &mut mpsc::Unb
     if !connected {
         // the player left while others play on: the AI plays for them (托管)
         let t0 = now();
-        let (g, delay) = {
+        let (g, delay, deep) = {
             let r = lock(room);
-            (r.game.clone(), r.ai_delay())
+            (r.game.clone(), r.ai_delay(), r.think == "deep")
         };
         let net = ctx.net.clone();
         let g2 = g.clone();
-        let mv = think(ctx, move || agent::choose(&net, &g2)).await.unwrap_or_else(|| agent::rule_move(&g));
+        let mv = think(ctx, move || agent::choose(&net, &g2, deep)).await.unwrap_or_else(|| agent::rule_move(&g));
         sleep(delay - (now() - t0)).await;
         let r = lock(room);
         if r.seats[p].connected() || !r.can_run() {

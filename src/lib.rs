@@ -2,6 +2,7 @@
 
 pub mod bot;
 pub mod cards;
+pub mod endgame;
 pub mod features;
 pub mod game;
 pub mod moves;

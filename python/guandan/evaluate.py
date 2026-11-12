@@ -78,15 +78,25 @@ def _utf8_stdio():
             pass
 
 
-def make_player(spec, device="cpu", search=""):
-    """'rule' | 'random' | checkpoint path; `search` = 'top_k,samples,depth' enables search."""
-    from .duplicate import NetPlayer, RulePlayer, RandomPlayer, SearchPlayer
+def make_player(spec, device="cpu", search="", endgame=""):
+    """'rule' | 'random' | checkpoint path; `search` = 'top_k,samples,depth' enables search;
+    `endgame` = 'cards,worlds[,guided floor]' enables the exact endgame search."""
+    from .duplicate import NetPlayer, RulePlayer, RandomPlayer, SearchPlayer, EndgamePlayer
     from .model import load_checkpoint
     if spec == "rule":
         return RulePlayer()
     if spec == "random":
         return RandomPlayer()
     m, _ = load_checkpoint(spec, device)
+    if endgame:
+        from .endgame import EndgameSearch
+        parts = endgame.split(",")
+        guided = float(parts[2]) if len(parts) > 2 and float(parts[2]) > 0 else None
+        margin = float(parts[3]) if len(parts) > 3 else 0.0
+        max_nodes = int(parts[4]) if len(parts) > 4 else 400_000
+        es = EndgameSearch(m, device, cards=int(parts[0]), worlds=int(parts[1]), guided=guided, margin=margin,
+                           max_nodes=max_nodes)
+        return EndgamePlayer(m, es, device)
     if not search:
         return NetPlayer(m, device)
     from .search import SearchAgent
@@ -113,15 +123,20 @@ def main():
     ap.add_argument("--search", default="", help="search for the model: top_k,samples,depth[,guided floor], e.g. 5,24,14 or 5,24,14,0.05 "
                          "(the last value samples hidden hands from the model's belief head)")
     ap.add_argument("--opponent-search", default="", help="search for the opponent")
+    ap.add_argument("--endgame", default="", help="exact endgame search for the model: cards,worlds[,guided floor], "
+                         "e.g. 20,16 (searched once at most `cards` cards are left in all hands)")
     args = ap.parse_args()
     torch.set_grad_enabled(False)
-    a = make_player(args.model, args.device, args.search)
+    a = make_player(args.model, args.device, args.search, args.endgame)
     b = make_player(args.opponent, args.device, args.opponent_search)
     r = duplicate_match(a, b, deals=args.deals, seed=args.seed, batch=args.batch,
                         log=lambda t: print(t, flush=True))
     print(f"RESULT vs {args.opponent}: score {r['score']:+.3f} ± {r['score_se']:.3f} levels/round, "
           f"win {r['win_rate']*100:.2f}% ± {r['win_rate_se']*100:.2f} pp (paired SE)  "
           f"({r['deals']} deals = {r['rounds']} rounds, {r['seconds']:.0f}s)", flush=True)
+    es = getattr(a, "searcher", None)
+    if es is not None and hasattr(es, "stats"):
+        print(f"endgame search: {es.stats}", flush=True)
 
 
 if __name__ == "__main__":

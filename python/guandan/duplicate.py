@@ -61,6 +61,21 @@ class SearchPlayer:
         return np.asarray([res[0][0] for res in self.searcher.evaluate_many(games)], np.int64)
 
 
+class EndgamePlayer:
+    """Network play, replaced by the exact endgame search (endgame.EndgameSearch) when few
+    cards are left."""
+
+    def __init__(self, model, searcher, device="cpu"):
+        self.net = NetPlayer(model, device)
+        self.searcher = searcher
+
+    def act(self, ro, obs, rows):
+        ch = self.net.act(ro, obs, rows)
+        idx = obs[0]
+        games = [ro.game(int(idx[r])) for r in rows]
+        return np.asarray(self.searcher.choose_many(games, ch), np.int64)
+
+
 def make_deals(n, seed):
     rng = np.random.default_rng(seed)
     deals = []

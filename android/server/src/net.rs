@@ -98,6 +98,7 @@ pub struct Net {
     b_lstm: Vec<f32>,    // bias_ih + bias_hh
     state_mlp: Vec<Lin>, // ReLU after every layer
     head: Vec<Lin>,      // ReLU after every layer but the last
+    belief: Option<Lin>, // prediction of the other hands (used by the endgame search), if exported
     pub config: String,
 }
 
@@ -184,6 +185,11 @@ impl Net {
         if state_mlp[0].n_in != STATE_DIM + l || head[0].n_in != state_mlp.last().unwrap().n_out + ACTION_DIM {
             return Err("模型与当前程序的输入格式不一致".into());
         }
+        let z_dim = state_mlp.last().unwrap().n_out;
+        let belief = match (t.get("belief.weight"), t.get("belief.bias")) {
+            (Some((ws, w)), Some((_, b))) if ws.len() == 2 && ws[1] == z_dim => Some(Lin::new(w.clone(), b.clone(), ws[0], ws[1])),
+            _ => None,
+        };
         Ok(Net {
             l,
             w_ih: Lin::new(wih.clone(), vec![0.0; 4 * l], 4 * l, HIST_DIM),
@@ -191,6 +197,7 @@ impl Net {
             b_lstm: bih.iter().zip(bhh).map(|(a, b)| a + b).collect(),
             state_mlp,
             head,
+            belief,
             config: meta.get("config").and_then(|c| c.as_str()).unwrap_or("{}").to_string(),
         })
     }
@@ -236,6 +243,15 @@ impl Net {
             y = out;
         }
         y
+    }
+
+    /// Belief logits (the other three hands, HIDDEN_DIM values) for the state encoded as z;
+    /// None when the model file has no belief head.
+    pub fn belief_logits(&self, z: &[f32]) -> Option<Vec<f32>> {
+        let b = self.belief.as_ref()?;
+        let mut out = vec![0f32; b.n_out];
+        b.dense(z, &mut out);
+        Some(out)
     }
 
     /// Q of every action (rows of `actions`, ACTION_DIM each) for the state encoded as z.

@@ -156,6 +156,58 @@ impl PyGame {
         self.clone()
     }
 
+    /// Exact level change for the team of the player to move after each of `moves`, assuming
+    /// every hand is visible (call it on a determinized copy) and perfect play to the end of the
+    /// round. None for every move when the search exceeds `max_nodes`.
+    #[pyo3(signature = (moves, max_nodes = 2_000_000))]
+    fn solve_moves(&self, py: Python<'_>, moves: Vec<PyMove>, max_nodes: u64) -> PyResult<Vec<Option<f32>>> {
+        if self.g.phase != Phase::Play {
+            return Err(PyValueError::new_err("solve_moves needs the play phase"));
+        }
+        let mv: Vec<Move> = moves.into_iter().map(|(k, key, c)| from_py(k, key, c)).collect::<PyResult<_>>()?;
+        let g = self.g.clone();
+        Ok(py.allow_threads(move || crate::endgame::solve_moves(&g, &mv, max_nodes)))
+    }
+
+    /// Endgame search for the player to move (see endgame::endgame_choose): index into
+    /// legal_moves() of a better move than `net_choice`, or None to keep the network's move.
+    /// `expect` = the network's belief as 3 x 54 expected card copies (flattened), or None.
+    #[pyo3(signature = (net_choice, expect = None, cards = 20, worlds = 16, floor = 0.02, max_nodes = 400_000, margin = 0.0, threads = 4, seed = 0))]
+    #[allow(clippy::too_many_arguments)]
+    fn endgame_choose(
+        &self,
+        py: Python<'_>,
+        net_choice: usize,
+        expect: Option<Vec<f32>>,
+        cards: u32,
+        worlds: usize,
+        floor: f32,
+        max_nodes: u64,
+        margin: f32,
+        threads: usize,
+        seed: u64,
+    ) -> PyResult<Option<usize>> {
+        let e = match expect {
+            Some(v) if v.len() == 162 => {
+                let mut e = [[0f32; 54]; 3];
+                for r in 0..3 {
+                    e[r].copy_from_slice(&v[r * 54..(r + 1) * 54]);
+                }
+                Some(e)
+            }
+            Some(_) => return Err(PyValueError::new_err("expect must have 162 values")),
+            None => None,
+        };
+        let cfg = crate::endgame::EndgameCfg { cards, worlds, floor, max_nodes, margin, threads };
+        let g = self.g.clone();
+        Ok(py.allow_threads(move || crate::endgame::endgame_choose(&g, net_choice, &cfg, e.as_ref(), seed)))
+    }
+
+    /// Cards still held by all four players.
+    fn cards_left(&self) -> u32 {
+        self.g.hands.iter().map(hand_count).sum()
+    }
+
     /// Copy with the hidden hands re-sampled from the point of view of `me` (default: current player).
     #[pyo3(signature = (seed, me = None))]
     fn determinize(&self, seed: u64, me: Option<u8>) -> Self {

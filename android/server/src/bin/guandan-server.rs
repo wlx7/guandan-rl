@@ -14,12 +14,38 @@ fn main() {
         // play a few moves with the network to get a non-trivial history
         let n: usize = arg("--moves").and_then(|m| m.parse().ok()).unwrap_or(0);
         for _ in 0..n {
-            let m = guandan_server::agent::choose(&net, &g);
+            let m = guandan_server::agent::choose_net(&net, &g);
             g.apply(&m).unwrap();
         }
         for (m, q) in guandan_server::agent::evaluate(&net, &g) {
             println!("{} {} {:?} {:.6}", m.kind as u8, m.key, m.cards, q);
         }
+        return;
+    }
+    if let Some(rounds) = arg("--endgame-selftest") {
+        // play rounds with the endgame search on; report how often it changed the network's move
+        let bytes = std::fs::read(&model).expect("model");
+        let net = guandan_server::net::Net::load(&bytes).expect("load");
+        let deep = args.iter().any(|a| a == "--deep");
+        let (mut searched, mut changed, mut worst) = (0u32, 0u32, 0f64);
+        for seed in 0..rounds.parse::<u64>().unwrap() {
+            let mut g = guandan_core::game::Game::new(seed + 1, guandan_core::game::Rules::default());
+            while matches!(g.phase, guandan_core::game::Phase::Play | guandan_core::game::Phase::Return) {
+                let left: u32 = g.hands.iter().map(guandan_core::cards::hand_count).sum();
+                let t = std::time::Instant::now();
+                let m = guandan_server::agent::choose(&net, &g, deep);
+                let dt = t.elapsed().as_secs_f64();
+                if g.phase == guandan_core::game::Phase::Play && left <= if deep { 24 } else { 20 } && g.legal_moves().len() > 1 {
+                    searched += 1;
+                    worst = worst.max(dt);
+                    if m != guandan_server::agent::choose_net(&net, &g) {
+                        changed += 1;
+                    }
+                }
+                g.apply(&m).unwrap();
+            }
+        }
+        println!("endgame selftest: searched {searched}, changed {changed}, slowest {:.0} ms", worst * 1000.0);
         return;
     }
     let cfg = guandan_server::Config {
