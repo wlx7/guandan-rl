@@ -29,6 +29,7 @@ export default {
 
   // connection
   '连接中断，正在重连…': 'Connection lost, reconnecting…',
+  '正在查看队友 {name} 的手牌': 'Viewing the hand of your partner, {name}',
   '未连接到主机': 'Not connected to the host',
 
   // waiting room

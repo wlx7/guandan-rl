@@ -216,7 +216,7 @@ async function viewSetup() {
   let me = {};
   try { [models, room, info, me] = await Promise.all([api.get('/api/models'), api.get('/api/room'), api.get('/api/info'), getMe()]); } catch (e) { toast(tr(e.message), 'err'); }
   if (!nameStore.get() && !me.admin) cfg.name = T('玩家'); // "房主" is the host computer's default name
-  const canSearch = !!(info.device && info.device.torch);  // look-ahead search needs PyTorch
+  const canSearch = true;  // both modes use the endgame search of the Rust core (no PyTorch needed)
   if (models.length) cfg.model = models[0].id;
 
   const root = h('div', { class: 'page' });
@@ -232,7 +232,17 @@ async function viewSetup() {
   function render() {
     const teach = cfg.mode === 'teach';
     if (teach) cfg.seats = ['human', 'ai', 'ai', 'ai'];
-    const choice = (on, title, desc, click) => h('button', { class: 'choice' + (on ? ' on' : ''), onclick: click, type: 'button' }, h('b', {}, title), h('span', {}, desc));
+    const choice = (on, title, desc, click) => {
+      const b = h('button', { class: 'choice' + (on ? ' on' : ''), onclick: click, type: 'button' }, h('b', {}, title), h('span', {}, desc));
+      b.dataset.desc = desc;
+      return b;
+    };
+    // a row of choices; on landscape phones only the titles are shown in the row and the
+    // description of the chosen one goes on a line below it (see .choice-desc)
+    const crow = (attrs, ...btns) => {
+      const on = btns.find((b) => b && b.classList.contains('on'));
+      return h('div', { class: 'choice-wrap' }, h('div', { class: 'choice-row', ...attrs }, ...btns), h('div', { class: 'choice-desc' }, on ? on.dataset.desc : ''));
+    };
     const mini = h('div', { class: 'mini-table' }, h('div', { class: 'center' }, T('牌桌')));
     for (let i = 0; i < 4; i++) {
       const isHuman = cfg.seats[i] === 'human';
@@ -260,17 +270,17 @@ async function viewSetup() {
       h('div', { class: 'setup' },
         h('div', { class: 'opts' },
           h('div', { class: 'panel' }, h('h2', {}, T('模式')),
-            h('div', { class: 'choice-row' },
+            crow({},
               choice(teach, T('教学模式'), T('你和三个 AI 对局。不限时，可以让 AI 给出出牌建议、点评你的出牌，也可以明牌查看所有人的手牌。'), () => { cfg.mode = 'teach'; render(); }),
               choice(!teach, T('实战模式'), T('与 AI 或局域网玩家对局。每步限时 20 秒，超时随机出牌；看不到别人的牌，自己出完后可以看队友的牌。'), () => { cfg.mode = 'real'; render(); }),
             )),
           h('div', { class: 'panel' }, h('h2', {}, T('对局长度')),
-            h('div', { class: 'choice-row' },
+            crow({},
               choice(cfg.length === 'quick', T('快速对局'), T('每局随机抽一个级牌，单局结算积分，不进贡。适合随时开打。'), () => { cfg.length = 'quick'; render(); }),
               choice(cfg.length === 'full', T('竞技模式'), T('从 2 打到 A：双上升三级、进贡还贡、抗贡、接风，过 A 才算赢。'), () => { cfg.length = 'full'; render(); }),
             )),
           cfg.length === 'quick' ? h('div', { class: 'panel' }, h('h2', {}, T('计分')),
-            h('div', { class: 'choice-row', style: { gridTemplateColumns: '1fr 1fr 1fr' } },
+            crow({ style: { gridTemplateColumns: '1fr 1fr 1fr' } },
               choice(cfg.scoring === 'none', T('只算升级'), T('按升级数结算：双上 3、一三游 2、一四游 1。'), () => { cfg.scoring = 'none'; render(); }),
               choice(cfg.scoring === 'standard', T('标准倍数'), T('底分同升级数；6 张以上炸弹、同花顺、天王炸每出一个翻一倍，封顶 16 倍。'), () => { cfg.scoring = 'standard'; render(); }),
               choice(cfg.scoring === 'all', T('全炸翻倍'), T('每出一个炸弹（含同花顺、天王炸）翻一倍，封顶 256 倍。'), () => { cfg.scoring = 'all'; render(); }),
@@ -278,9 +288,9 @@ async function viewSetup() {
             cfg.scoring !== 'none' ? h('p', { class: 'dim', style: { fontSize: '12.5px', margin: '10px 0 0' } },
               T('倍数只影响每局结算的积分，AI 的打法不变，仍以赢下本局、多升级为目标。')) : null) : null,
           !canSearch ? null : h('div', { class: 'panel' }, h('h2', {}, T('AI 思考方式')),
-            h('div', { class: 'choice-row' },
-              choice(cfg.think === 'fast', T('神经网络'), T('推荐。直接用训练好的网络出牌，不用等待。对随包模型这是最强的方式。'), () => { cfg.think = 'fast'; render(); }),
-              choice(cfg.think === 'deep', T('推演搜索（实验）'), T('网络先挑出最好的几手，再在随机推测的对手手牌里各模拟打下去比较。对训练不久的模型有帮助；对随包模型反而略弱，每步也要多想半秒左右。'), () => { cfg.think = 'deep'; render(); }),
+            crow({},
+              choice(cfg.think === 'fast', T('神经网络'), T('推荐。用训练好的网络出牌；一局快结束时（四家合计剩 20 张以内）自动做残局搜索。几乎不用等待。'), () => { cfg.think = 'fast'; render(); }),
+              choice(cfg.think === 'deep', T('深度残局搜索'), T('残局搜索从剩 24 张就开始，推测的牌局也多一倍，每局再多赢一点；一局的后半段有时每步要多想 1 秒左右。'), () => { cfg.think = 'deep'; render(); }),
             )),
           h('div', { class: 'panel' }, h('h2', {}, T('AI 与玩家')),
             h('div', { class: 'field' }, h('label', {}, T('AI 模型')), models.length ? modelSelect(cfg.model, (v) => { cfg.model = v; }) : h('div', { class: 'dim' }, T('还没有模型：请先到训练中心训练，或下载 Release 中的模型。'))),
@@ -293,7 +303,7 @@ async function viewSetup() {
           h('p', { class: 'muted', style: { margin: '0 0 6px', fontSize: '13px' } }, teach ? T('教学模式固定为你与三个 AI。') : T('对家是你的队友。设为“玩家”的座位，可由同一 WiFi 下的手机或电脑扫码加入。')),
           mini,
           humans > 0 ? h('div', { class: 'field', style: { marginTop: '8px' } }, h('label', {}, T('这台{d}', { d: dev() })),
-            h('div', { class: 'choice-row' },
+            crow({},
               choice(cfg.hostPlays, T('入座打牌'), teach ? T('在这台{d}上打。', { d: dev() }) : T('你在这台{d}上坐南家（第一个“玩家”座位）。', { d: dev() }), () => { cfg.hostPlays = true; render(); }),
               choice(!cfg.hostPlays, T('只做主机'), T('这台{d}只运行 AI 和显示牌桌，用手机等其他设备扫码入座（看不到任何人的手牌）。', { d: dev() }), () => { cfg.hostPlays = false; render(); }),
             )) : null,

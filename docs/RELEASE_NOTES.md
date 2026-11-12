@@ -18,6 +18,15 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.11.1
+
+- **自己出完后看队友的牌**：实战模式里，队友的手牌现在显示在你自己手牌原来的位置，大小和排列跟自己的手牌一样（可以一键理牌、换排序，但点不动），外面有一圈虚线框，下方标着“正在查看队友 XX 的手牌”。
+- **手机横屏的“开一桌”页面不再拥挤**：左边设置、右边座位；每项设置一行，只显示当前选中那一项的说明。
+- “AI 思考方式”的第二项改名为“深度残局搜索”，说明与 v1.11.0 的实际行为一致；安卓版和免安装版现在也能选。
+- AI 和模型与 v1.11.0 相同。
+
+**English.** After you go out in a real game, your partner's hand is shown where your own hand was, in the same layout, clearly marked. The "new table" page is no longer cramped on landscape phones. The second AI thinking mode is now called "Deep endgame search" and is also available in the Android and portable builds. The AI and the model are unchanged.
+
 ### v1.11.0
 
 - **随包模型明显变强**：在 v1.10.5 的基础上又自对弈约 99 亿局面（总计 191 亿），并改进了训练时的探索方式（少走完全随机的牌，多在网络认为最好的几手里试）。在 3 万副从未用过的复式牌上，对 v1.10.5 每局多赢 **0.161 级**，单局胜率 **52.96%**；对 v1.9.0 每局多赢 0.661 级（胜率 60.4%），对规则 AI 胜率 92.9%。打完整比赛（从 2 打到过 A），2,048 场里赢 **58.3%**。

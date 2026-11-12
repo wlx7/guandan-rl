@@ -131,6 +131,17 @@ export function mountTable(app, roomId, watch) {
   const isPaused = () => !!(S.s && (S.s.paused || S.s.pause_by));
   const myTurn = () => S.s && you() >= 0 && !isPaused() && S.s.current === you() && S.s.status === 'playing' && (S.s.phase === 0 || S.s.phase === 1);
   const myHand = () => (S.s ? (you() >= 0 ? S.s.hand || [] : S.s.hands['0'] || []) : []);
+  // After going out in a real game the server shows you your partner's hand. It is drawn where
+  // your own hand was, in the same layout (read-only), instead of as a strip of small cards.
+  // Returns the partner's seat, or -1.
+  const mateSeat = () => {
+    const s = S.s;
+    if (!s || you() < 0 || s.mode === 'teach' || s.status !== 'playing' || s.phase >= 2 || (s.hand || []).length) return -1;
+    const p = (you() + 2) % 4;
+    const hd = s.hands && s.hands[String(p)];
+    return hd && hd.length ? p : -1;
+  };
+  const shownHand = () => (mateSeat() >= 0 ? S.s.hands[String(mateSeat())] : myHand());
 
   // ------------------------------------------------------------ state
   function onState(s) {
@@ -294,7 +305,8 @@ export function mountTable(app, roomId, watch) {
 
   function renderSeats() {
     const s = S.s;
-    board.classList.toggle('revealed', Object.keys(s.hands || {}).some((k) => +k !== base()) && (s.mode !== 'teach' || S.reveal || you() < 0));
+    const mate = mateSeat();
+    board.classList.toggle('revealed', Object.keys(s.hands || {}).some((k) => +k !== base() && +k !== mate) && (s.mode !== 'teach' || S.reveal || you() < 0));
     const band = compactMQ.matches;
     openSlots.forEach((e) => e.replaceChildren());
     for (let r = 0; r < 4; r++) {
@@ -325,7 +337,7 @@ export function mountTable(app, roomId, watch) {
         st.kind === 'human' && !st.connected ? h('div', { class: 'off' }, s.paused || s.status !== 'playing' ? T('离线') : T('离线 · AI 托管')) : null);
       const kids = [av, info];
       const vis = s.hands[String(p)];
-      const showHand = vis && r !== 0 && (s.mode !== 'teach' || S.reveal || you() < 0);
+      const showHand = vis && r !== 0 && p !== mate && (s.mode !== 'teach' || S.reveal || you() < 0);
       if (showHand && vis.length) {
         const row = miniRow(vis, s.level, 'm');
         if (band) openSlots[3 - r].appendChild(row); else kids.push(row);
@@ -458,8 +470,16 @@ export function mountTable(app, roomId, watch) {
     // tools: a bar under the hand (left: arrange, middle: straight flushes or the play buttons,
     // right: selection tools and switches)
     const L = [], M = [], R = [];
-    const cards = myHand();
-    if (you() >= 0 && cards.length) {
+    const mate = mateSeat();
+    const cards = shownHand();
+    if (mate >= 0) {
+      // looking at the partner's hand: it can be arranged and sorted like your own, nothing else
+      const arranged = S.arrange;
+      L.push(h('button', { class: 'btn small' + (arranged ? ' primary' : ''),
+        onclick: () => { S.arrange = !arranged; pref.set('arrange', S.arrange); renderHand(); renderActions(); } }, arranged ? T('恢复') : T('一键理牌')));
+      if (!arranged) L.push(h('button', { class: 'btn small', onclick: () => { S.desc = !S.desc; renderHand(); renderActions(); } }, S.desc ? T('大→小') : T('小→大')));
+      M.push(h('span', { class: 'mate-tag', role: 'status' }, h('i', { class: 'eye' }), T('正在查看队友 {name} 的手牌', { name: nameOf(mate) })));
+    } else if (you() >= 0 && cards.length) {
       const arranged = S.arrange || S.custom.length;
       L.push(h('button', { class: 'btn small' + (arranged ? ' primary' : ''), title: arranged ? T('恢复按点数排列') : T('把炸弹、同花顺、顺子、三带二等组合各放一列（双击一列可整列选中）'),
         onclick: () => {
@@ -589,10 +609,13 @@ export function mountTable(app, roomId, watch) {
 
   function renderHand() {
     const s = S.s;
-    const cards = myHand();
-    const interactive = you() >= 0 && myTurn();
+    const mate = mateSeat();
+    const cards = shownHand();
+    const interactive = mate < 0 && you() >= 0 && myTurn();
     hand.classList.toggle('disabled', !interactive);
     hand.classList.toggle('arranged', !!(S.arrange || S.custom.length));
+    handWrap.classList.toggle('mate', mate >= 0);
+    if (mate >= 0) { S.sel.clear(); S.custom = []; }
     if (!cards.length) { hand.replaceChildren(); hand.style.height = '8px'; return; }
     const ids = withIds(cards);
     const byType = {};
@@ -644,7 +667,7 @@ export function mountTable(app, roomId, watch) {
     el.classList.toggle('sel', on);
   }
   hand.addEventListener('pointerdown', (e) => {
-    if (you() < 0) return;
+    if (you() < 0 || mateSeat() >= 0) return;  // read-only: a spectator, or the partner's hand
     const c = cardFromPoint(e.clientX, e.clientY);
     if (!c) return;
     e.preventDefault();
@@ -672,6 +695,7 @@ export function mountTable(app, roomId, watch) {
   hand.addEventListener('dblclick', (e) => {
     const c = cardFromPoint(e.clientX, e.clientY);
     // two quick taps on two different cards of one column are two selections, not a double tap
+    if (mateSeat() >= 0) return;
     if (!c || !S.tap2 || (S.tap1 && S.tap1.id !== c.dataset.id)) return;
     S.tap2 = false;
     const col = c.dataset.col;
