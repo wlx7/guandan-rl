@@ -209,7 +209,7 @@ function closeTable(r, refresh) {
 
 // ---------------------------------------------------------------- setup
 async function viewSetup() {
-  const cfg = { think: 'fast', scoring: 'none', mode: 'teach', length: 'full', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || T('房主'), hostPlays: true };
+  const cfg = { think: 'fast', scoring: 'none', mode: 'real', length: 'quick', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || T('房主'), hostPlays: true };
   let models = [];
   let room = null;
   let info = {};
