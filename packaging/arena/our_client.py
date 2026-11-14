@@ -176,6 +176,8 @@ class Player:
         for m, q in self.agent.evaluate(game):
             qc.setdefault(tuple(sorted(m[2])), q)
         scored = sorted(((qc.get(tuple(sorted(cards(a[2]))), -1e9), i) for i, a in enumerate(actions)), reverse=True)
+        print(f"[{self.name}] our move {best} not offered; referee offers {len(actions)}: "
+              f"{actions[:6]}; took {actions[scored[0][1]]} (q {scored[0][0]:.3f})", file=sys.stderr, flush=True)
         return scored[0][1], True
 
     def act_play(self, msg):
