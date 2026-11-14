@@ -17,6 +17,7 @@ from guandan.agents import ENDGAME_FAST, GameAgent  # noqa: E402
 from guandan.paths import default_model  # noqa: E402
 from our_client import RANKS, SUITS, Player  # noqa: E402
 
+LEVEL = [0]
 NAMES = {0: "PASS", 1: "Single", 2: "Pair", 3: "Trips", 4: "ThreeWithTwo", 5: "Straight",
          6: "ThreePair", 7: "TwoTrips", 8: "Bomb", 9: "StraightFlush", 10: "Bomb"}
 
@@ -32,7 +33,17 @@ def cstr(t):
 def fmt(m):
     if m[0] == 0:
         return ["PASS", "PASS", "PASS"]
-    return [NAMES[m[0]], "x", [cstr(c) for c in m[2]]]
+    return [NAMES[m[0]], ref_rank(m), [cstr(c) for c in m[2]]]
+
+
+def ref_rank(m):
+    """The rank the competition referee would declare: lowest card of a sequence, else the rank."""
+    kind, key = m[0], m[1]
+    if kind in (5, 6, 7, 9):
+        return "A" if key == 0 else RANKS[key - 1]
+    if key >= 14:
+        return "B" if key == 14 else "R"
+    return RANKS[LEVEL[0]] if key == 13 else RANKS[key]
 
 
 def main():
@@ -50,6 +61,7 @@ def main():
     mismatch, nback = [0], [0]
     for rnd in range(args.rounds):
         tl = g.team_level
+        LEVEL[0] = g.level
         for p in range(4):
             players[p].on_message({"type": "notify", "stage": "beginning", "myPos": p,
                                    "handCards": [cstr(c) for c in g.hand(p)]})

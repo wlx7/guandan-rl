@@ -120,7 +120,7 @@ class Player:
         mine = cards(msg["handCards"])
         # our hand now = hand at the start of play + nothing played by us yet (built at our
         # first decision), unless we already played: then add our played cards back
-        for p, _k, cs in self.plays:
+        for p, _k, cs, _r in self.plays:
             if p == self.pos:
                 mine += cs
         first = self.plays[0][0] if self.plays else self.pos
@@ -134,7 +134,7 @@ class Player:
     def catch_up(self):
         g = self.game
         while self.applied < len(self.plays) and not self.desynced:
-            p, kind, cs = self.plays[self.applied]
+            p, kind, cs, rs = self.plays[self.applied]
             self.applied += 1
             if g.current != p:
                 self.desync(f"turn: engine {g.current} referee {p}")
@@ -149,7 +149,9 @@ class Player:
                 if p != self.pos:
                     g.ensure_holds(p, self.pos, cs)
                 opts = g.legal_interpretations(cs)
-                pick = [m for m in opts if m[0] == kind] or opts
+                same = [m for m in opts if m[0] == kind]
+                want = self.ref_keys(kind, rs, g.level)
+                pick = [m for m in same if m[1] in want] or same or opts
                 if not pick:
                     self.desync(f"no interpretation of {cs} kind {kind}")
                     return
@@ -157,6 +159,18 @@ class Player:
             except Exception as e:  # noqa: BLE001
                 self.desync(str(e))
                 return
+
+    @staticmethod
+    def ref_keys(kind, rs, level):
+        """Our move keys that match the rank the referee declares for a move (see moves.rs)."""
+        if rs in ("B", "R"):
+            return {14 if rs == "B" else 15}
+        if rs not in RANKS:
+            return set()
+        r = RANKS.index(rs)
+        if kind in (5, 6, 7, 9):  # sequences: position of the lowest card, A low = 0
+            return {0} if r == 12 else {r + 1}
+        return {13 if r == level else r}
 
     def desync(self, why):
         self.desynced = True
@@ -302,7 +316,7 @@ class Player:
                 cs = cards(a[2])
                 if kind == 8 and cs and min(cs) >= 52:
                     kind = 10
-                self.plays.append((msg["curPos"], kind, cs))
+                self.plays.append((msg["curPos"], kind, cs, a[1]))
                 if self.game is not None:
                     self.catch_up()
             elif stage == "episodeOver":
