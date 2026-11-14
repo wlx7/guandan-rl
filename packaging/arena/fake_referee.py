@@ -85,7 +85,8 @@ def main():
             moves = g.legal_moves()
             msg = {"type": "act", "stage": "play", "handCards": [cstr(c) for c in g.hand(p)],
                    "publicInfo": [{"rest": n, "playArea": None} for n in g.hand_counts()],
-                   "actionList": [fmt(m) for m in moves], "greaterAction": None, "greaterPos": -1, **ranks(p)}
+                   "actionList": [fmt(m) for m in moves], "greaterAction": fmt(g.last_move()) if g.last_move() else None,
+                   "greaterPos": g.last_player if g.last_move() else -1, **ranks(p)}
             i = players[p].on_message(msg)
             decisions += 1
             m = moves[i]

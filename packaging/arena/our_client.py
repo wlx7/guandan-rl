@@ -188,6 +188,8 @@ class Player:
             self.build_play_view(msg)
         else:
             self.catch_up()
+        if not self.desynced and self.game.current == self.pos:
+            self.check_against_referee(msg)
         if self.desynced or self.game.current != self.pos:
             if not self.desynced:
                 self.desync(f"not our turn in engine ({self.game.current} vs {self.pos})")
@@ -198,6 +200,18 @@ class Player:
         if fb:
             self.stats["fallback"] += 1
         return i
+
+    def check_against_referee(self, msg):
+        """The referee's view of the trick and the card counts must equal our engine's."""
+        g = self.game
+        rest = [pi["rest"] for pi in msg["publicInfo"]]
+        ga, gp = msg.get("greaterAction"), msg.get("greaterPos", -1)
+        lm = g.last_move()
+        ref = None if (gp in (-1, None) or not ga or ga[0] == "PASS") else (gp, sorted(cards(ga[2])))
+        ours = None if lm is None else (g.last_player, sorted(lm[2]))
+        if list(g.hand_counts()) != rest or ref != ours:
+            self.desync(f"state: engine counts {list(g.hand_counts())} trick {ours}; "
+                        f"referee counts {rest} trick {ref}; last plays {self.plays[-8:]}")
 
     def fallback_play(self, msg):
         """After a desync: score the referee's moves on a fresh view without history."""
