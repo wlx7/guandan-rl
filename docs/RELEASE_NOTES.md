@@ -18,18 +18,6 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
-### v1.11.3
-
-- **与网上公开的掼蛋 AI 对战实测**（报告见 [docs/ARENA.md](https://github.com/wlx7/guandan-rl/blob/main/docs/ARENA.md)）：在全国掼蛋 AI 大赛的官方离线裁判程序上打完整比赛（从 2 打到过 A），双方都只是连上去的客户端。
-  - 对 **DanZero**（AAAI 2023 论文官方模型）：2,633 小局赢 **69.8%**，平均每小局 +1.22 级；整局 **274 / 280**。只用神经网络、不开残局搜索也是 70.1%。
-  - 对首届全国赛最强的规则程序 **南邮掼蛋 AI**（DanLM 修复版）：小局 **90.7%**，整局 **280 / 280**。
-  - 作为对照，同一环境里 DanZero 对南邮掼蛋 AI 赢 77.4% 小局（DanLM 公布 71.4%），说明 DanZero 的接入没有削弱它。
-  - DanLM、DanZero+（PPO）、FableDan、DanKS 没有可在 Linux 上运行的公开模型，未能参测。
-- 新增 `packaging/arena/`：让本项目的 AI 作为客户端接入全国赛平台的工具，可复现上述测评。
-- AI 和模型与 v1.11.2 相同。
-
-**English.** Tested against published GuanDan AIs on the official referee of the national competition, complete matches from level 2 through A: against DanZero (AAAI 2023) 69.8% of 2,633 rounds and 274 of 280 matches; against the strongest bot of the 1st national competition 90.7% of rounds and all 280 matches. See docs/ARENA.md. The AI and the model are unchanged.
-
 ### v1.11.2
 
 - “开一桌”页面默认改为**实战模式 + 快速对局**（仍可切回教学模式或竞技模式）。
