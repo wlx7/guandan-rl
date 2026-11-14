@@ -156,6 +156,92 @@ impl PyGame {
         self.clone()
     }
 
+    /// Reset this game to the start of a round as seen by one player, for playing against an
+    /// external referee (packaging/arena): `hands` are the four hands at that moment (the
+    /// player's own real hand, placeholders of the right size for the others), `tribute` the
+    /// tribute / return records (from, to, card, is_return), `phase` 0 = return, 1 = play.
+    #[pyo3(signature = (team_level, banker, level, hands, current, tribute = vec![], anti_tribute = false,
+                        a_fail = [0, 0], phase = 1, pending_returns = vec![], lead_after_tribute = 0))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_view(
+        &mut self,
+        team_level: [u8; 2],
+        banker: i8,
+        level: u8,
+        hands: Vec<Vec<u8>>,
+        current: u8,
+        tribute: Vec<(u8, u8, u8, bool)>,
+        anti_tribute: bool,
+        a_fail: [u8; 2],
+        phase: u8,
+        pending_returns: Vec<(u8, u8)>,
+        lead_after_tribute: u8,
+    ) -> PyResult<()> {
+        if hands.len() != 4 || level > 12 || current > 3 || team_level.iter().any(|&l| l > 12) {
+            return Err(PyValueError::new_err("bad view"));
+        }
+        let mut hs = [[0u8; 54]; 4];
+        for (p, h) in hands.iter().enumerate() {
+            for &c in h {
+                if c >= 54 || hs[p][c as usize] >= 2 {
+                    return Err(PyValueError::new_err("bad card in hand"));
+                }
+                hs[p][c as usize] += 1;
+            }
+        }
+        let g = &mut self.g;
+        g.team_level = team_level;
+        g.banker = banker;
+        g.level = level;
+        g.a_fail = a_fail;
+        g.hands = hs;
+        g.dealt = hs;
+        g.played = [[0; 54]; 4];
+        g.current = current;
+        g.phase = if phase == 0 { Phase::Return } else { Phase::Play };
+        g.last_move = None;
+        g.last_player = current;
+        g.passes = 0;
+        g.finished.clear();
+        g.history.clear();
+        g.tribute = tribute.into_iter().map(|(from, to, card, is_return)| TributeRec { from, to, card, is_return }).collect();
+        g.anti_tribute = anti_tribute;
+        g.pending_returns = pending_returns;
+        g.lead_after_tribute = lead_after_tribute;
+        g.jiefeng = false;
+        g.trick_id = 0;
+        g.bombs = [0; 4];
+        g.winner = -1;
+        Ok(())
+    }
+
+    /// Make the hidden hand of player `p` contain `cards` by swapping cards with the other
+    /// hidden hands (never with `me`); hand sizes stay the same. For replaying the moves of
+    /// players whose hands are unknown (see set_view).
+    fn ensure_holds(&mut self, p: u8, me: u8, cards: Vec<u8>) -> PyResult<()> {
+        if p > 3 || me > 3 || p == me {
+            return Err(PyValueError::new_err("bad player"));
+        }
+        let need = hand_from_cards(&cards);
+        let hs = &mut self.g.hands;
+        for t in 0..54usize {
+            while hs[p as usize][t] < need[t] {
+                let q = (0..4u8)
+                    .find(|&q| q != p && q != me && hs[q as usize][t] > 0)
+                    .ok_or_else(|| PyValueError::new_err("card not available in hidden hands"))?;
+                // give q one of p's cards that p does not need
+                let spare = (0..54usize)
+                    .find(|&s| s != t && hs[p as usize][s] > need[s] && hs[q as usize][s] < 2)
+                    .ok_or_else(|| PyValueError::new_err("no spare card to swap"))?;
+                hs[q as usize][t] -= 1;
+                hs[p as usize][t] += 1;
+                hs[p as usize][spare] -= 1;
+                hs[q as usize][spare] += 1;
+            }
+        }
+        Ok(())
+    }
+
     /// Exact level change for the team of the player to move after each of `moves`, assuming
     /// every hand is visible (call it on a determinized copy) and perfect play to the end of the
     /// round. None for every move when the search exceeds `max_nodes`.
