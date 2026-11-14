@@ -28,6 +28,9 @@ class ModelConfig:
     preset: str = "medium"
     belief: bool = False  # auxiliary head that predicts the other players' hands (training only)
     ntp: bool = False  # auxiliary head that predicts the next move of the history (training only)
+    # perfect-information value network (training only): the state input also holds the other
+    # three hands (HIDDEN_DIM bits appended to the state); see make_oracle and train.py --oracle
+    oracle: bool = False
 
     def to_dict(self):
         return asdict(self)
@@ -67,7 +70,7 @@ class GuandanNet(nn.Module):
         self.cfg = cfg
         h = cfg.hidden
         self.lstm = nn.LSTM(HIST_DIM, cfg.lstm, batch_first=True)
-        self.state_mlp = mlp([STATE_DIM + cfg.lstm, h, h])
+        self.state_mlp = mlp([STATE_DIM + (HIDDEN_DIM if cfg.oracle else 0) + cfg.lstm, h, h])
         head = [h + ACTION_DIM] + [h] * (cfg.head_layers - 1) + [h // 2]
         self.head = nn.Sequential(mlp(head), nn.Linear(h // 2, 1))
         if cfg.belief:
@@ -112,6 +115,21 @@ class GuandanNet(nn.Module):
         if index is not None:
             z = z.index_select(0, index)
         return self.score(z, actions)
+
+
+@torch.no_grad()
+def make_oracle(model: "GuandanNet") -> "GuandanNet":
+    """Perfect-information copy of `model`: the state input gets HIDDEN_DIM more bits (the
+    other hands, appended after the state) whose weights start at zero, so that the oracle
+    starts out with exactly the values of `model` and learns to use the hidden cards."""
+    cfg = ModelConfig(**{**model.cfg.to_dict(), "oracle": True, "belief": False, "ntp": False})
+    o = GuandanNet(cfg)
+    src = {k: v for k, v in model.state_dict().items() if not k.startswith(("belief.", "ntp."))}
+    w = src["state_mlp.0.weight"]  # [h, STATE_DIM + lstm]
+    z = torch.zeros(w.shape[0], HIDDEN_DIM, dtype=w.dtype)
+    src["state_mlp.0.weight"] = torch.cat([w[:, :STATE_DIM], z, w[:, STATE_DIM:]], dim=1)
+    o.load_state_dict(src)
+    return o
 
 
 @torch.no_grad()

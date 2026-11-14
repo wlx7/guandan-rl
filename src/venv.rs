@@ -37,6 +37,9 @@ pub struct VecEnv {
     pub out_a: Vec<u8>,
     pub out_t: Vec<f32>,
     pub out_x: Vec<u8>,
+    /// Round outcome of every sample (levels, from the sample's team), whatever the target.
+    pub out_r: Vec<f32>,
+    last_r: Vec<f32>,
     record_hidden: bool,
     /// Seats whose decisions become training samples (per environment). Seats played by
     /// an older opponent model are excluded: their values belong to a different policy.
@@ -72,6 +75,8 @@ impl VecEnv {
             out_a: vec![],
             out_t: vec![],
             out_x: vec![],
+            out_r: vec![],
+            last_r: vec![],
             record_hidden: false,
             learners: vec![[true; 4]; n],
             rng,
@@ -219,6 +224,7 @@ impl VecEnv {
                     self.out_h.extend_from_slice(&st.hist);
                     self.out_a.extend_from_slice(&st.action);
                     self.out_t.push(targets[k]);
+                    self.out_r.push(rew[team(st.player) as usize]);
                     if self.record_hidden {
                         self.out_x.extend_from_slice(&st.hidden);
                     }
@@ -243,6 +249,7 @@ impl VecEnv {
     /// (n, states, hists, actions, targets) of finished trajectories.
     pub fn take_samples(&mut self) -> (usize, Vec<u8>, Vec<u8>, Vec<u8>, Vec<f32>) {
         let n = self.out_t.len();
+        self.last_r = std::mem::take(&mut self.out_r);
         (
             n,
             std::mem::take(&mut self.out_s),
@@ -260,6 +267,21 @@ impl VecEnv {
 
     pub fn take_hidden(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.out_x)
+    }
+
+    /// Round outcomes of the samples of the last `take_samples`, in the same order.
+    pub fn take_returns(&mut self) -> Vec<f32> {
+        std::mem::take(&mut self.last_r)
+    }
+
+    /// The other players' hands seen from the player to move, for every environment
+    /// (HIDDEN_DIM bytes each): the extra input of the perfect-information value network.
+    pub fn observe_hidden(&self) -> Vec<u8> {
+        let mut out = vec![0u8; self.len() * HIDDEN_DIM];
+        for (i, g) in self.games.iter().enumerate() {
+            encode_hidden(g, g.current, &mut out[i * HIDDEN_DIM..(i + 1) * HIDDEN_DIM]);
+        }
+        out
     }
 
     /// Choose which seats of environment `i` produce training samples from now on.

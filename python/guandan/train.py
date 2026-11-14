@@ -11,6 +11,10 @@
   hands from its state encoding (labels exist only in training). In a 2+2 hour A/B test
   it beat plain DMC by 0.39 levels per round head-to-head.
 * Optional search labels (`--search-actors`, off by default, experimental).
+* Optional perfect-information critic (`--oracle`, off by default, experimental): a second
+  network that also sees the other players' hands learns the round outcome; with TD(lambda)
+  the playing network bootstraps from its values instead of its own. The playing network
+  still only sees its own hand and the public history.
 * The learner regresses Q(s, a) onto these Monte-Carlo returns.
 * An evaluator process periodically measures the latest checkpoint on duplicate deals
   (each deal played twice with the teams swapped) against a random player, a fixed
@@ -35,7 +39,7 @@ import torch.multiprocessing as mp
 
 from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
-                    HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params, widen)
+                    HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params, widen, make_oracle)
 from .agents import BatchPolicy, unpack_obs, subset_obs
 from .paths import runs_dir, safe_run_name
 
@@ -72,6 +76,10 @@ def build_parser():
                     help="weight of the auxiliary loss that predicts the other players' hands (0 = off)")
     ap.add_argument("--ntp", type=float, default=0.0,
                     help="weight of the auxiliary loss that predicts the next move of the history (0 = off)")
+    ap.add_argument("--oracle", action="store_true",
+                    help="experimental: bootstrap TD(lambda) targets from a perfect-information value network "
+                         "(needs --td-lambda below 1)")
+    ap.add_argument("--oracle-lr", type=float, default=1e-4, help="learning rate of the --oracle network")
     ap.add_argument("--search-actors", type=int, default=0,
                     help="self-play processes that label the top candidate moves with search values (expert iteration)")
     ap.add_argument("--search-envs", type=int, default=64, help="matches per search actor")
@@ -132,7 +140,7 @@ def pool_paths(run_dir, base, extra, keep=8):
     return [p for p in dict.fromkeys(paths) if os.path.exists(p)]
 
 
-def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
+def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, shared_oracle=None):
     try:
         set_priority("low")
         torch.set_num_threads(1)
@@ -146,9 +154,13 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
         model = GuandanNet(ModelConfig(**cfg)).to(dev)
         model.eval()
         policy = BatchPolicy(model, dev)
+        oracle = None
+        if shared_oracle is not None:
+            oracle = GuandanNet(ModelConfig(**shared_oracle.cfg.to_dict())).to(dev)
+            oracle.eval()
         n_env = args["envs"]
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
-        aux = float(args.get("aux", 0.0)) > 0
+        aux = float(args.get("aux", 0.0)) > 0 or oracle is not None
         env.set_record_hidden(aux)
         td_lambda = float(args.get("td_lambda", 1.0))
         use_td = td_lambda < 1.0
@@ -209,6 +221,8 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
             if version.value != local_v:
                 local_v = version.value
                 model.load_state_dict(shared_model.state_dict())
+                if oracle is not None:
+                    oracle.load_state_dict(shared_oracle.state_dict())
             players, s, h, a, off = unpack_obs(env.observe())
             if any(opp):
                 old = np.asarray([o is not None for o in opp]) & ((players % 2) != learn_team)
@@ -224,6 +238,11 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
             elif use_td:
                 # targets are in levels; the network predicts levels / 3
                 ch, qc = policy.choose(s, h, a, off, args["epsilon"], rng, top_k, eps_top, return_q=True)
+                if oracle is not None:
+                    # bootstrap values from the perfect-information network instead
+                    x = np.frombuffer(env.observe_hidden(), np.uint8).reshape(n_env, HIDDEN_DIM)
+                    rows = off[:-1] + ch
+                    qc = oracle_values(oracle, dev, s, x, h, a[rows])
                 res = env.step_q(ch.tolist(), (qc * 3.0).tolist())
             else:
                 ch = policy.choose(s, h, a, off, args["epsilon"], rng, top_k, eps_top)
@@ -240,9 +259,10 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                 a_p = np.packbits(np.frombuffer(ab, np.uint8).reshape(n, ACTION_DIM), axis=1)
                 t = np.frombuffer(tb, np.float32).copy()
                 x_p = np.packbits(np.frombuffer(env.take_hidden(), np.uint8).reshape(n, HIDDEN_DIM), axis=1) if aux else None
+                r = np.frombuffer(env.take_returns(), np.float32).copy()
                 while not stop.is_set():
                     try:
-                        q.put((aid, s_p, h_p, a_p, t, rounds, steps, x_p), timeout=1.0)
+                        q.put((aid, s_p, h_p, a_p, t, rounds, steps, x_p, r), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -250,6 +270,15 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
                 steps = 0
     except KeyboardInterrupt:
         pass
+
+
+@torch.no_grad()
+def oracle_values(oracle, dev, s, x, h, a_rows):
+    """Values (levels / 3) of the chosen moves by the perfect-information network."""
+    st = torch.from_numpy(np.concatenate([s, x], axis=1)).to(dev).float()
+    ht = torch.from_numpy(np.ascontiguousarray(h)).to(dev).float()
+    at = torch.from_numpy(np.ascontiguousarray(a_rows)).to(dev).float()
+    return oracle(st, ht, at).float().cpu().numpy()
 
 
 def search_actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict):
@@ -309,7 +338,7 @@ def search_actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict
                 S, H, A, T = [], [], [], []
                 while not stop.is_set():
                     try:
-                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps, None), timeout=1.0)
+                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps, None, None), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -385,12 +414,13 @@ class Replay:
         self.h = torch.zeros((cap, (H_FLAT + 7) // 8), dtype=torch.uint8, device=device)
         self.a = torch.zeros((cap, (ACTION_DIM + 7) // 8), dtype=torch.uint8, device=device)
         self.t = torch.zeros(cap, dtype=torch.float32, device=device)
+        self.r = torch.zeros(cap, dtype=torch.float32, device=device)  # round outcomes (--oracle)
         # auxiliary labels: the other players' hands
         self.x = torch.zeros((cap, (HIDDEN_DIM + 7) // 8), dtype=torch.uint8, device=device) if hidden else None
         self.pos = 0
         self.size = 0
 
-    def add(self, s, h, a, t, x=None):
+    def add(self, s, h, a, t, x=None, r=None):
         n = len(t)
         idx = (torch.arange(n, device=self.device) + self.pos) % self.cap
         self.s[idx] = torch.from_numpy(s).to(self.device)
@@ -399,12 +429,15 @@ class Replay:
         self.t[idx] = torch.from_numpy(t).to(self.device)
         if self.x is not None and x is not None:
             self.x[idx] = torch.from_numpy(x).to(self.device)
+        if r is not None:
+            self.r[idx] = torch.from_numpy(r).to(self.device)
         self.pos = (self.pos + n) % self.cap
         self.size = min(self.cap, self.size + n)
 
     def sample(self, b):
         """(states, hists, actions, targets, hidden-hand labels or None)"""
         idx = torch.randint(0, self.size, (b,), device=self.device)
+        self.last_idx = idx
         if self.device == "cpu":  # numpy is faster than torch bit ops on CPU
             ii = idx.numpy()
             s = torch.from_numpy(np.unpackbits(self.s.numpy()[ii], axis=1, count=STATE_DIM)).float()
@@ -438,6 +471,9 @@ def other_active_runs(exclude=None):
 def run(args):
     from .proc import run_alive, write_pid, remove_pid, resource_limits
     args.name = safe_run_name(args.name) or time.strftime("run-%Y%m%d-%H%M%S")
+    if args.oracle and (args.td_lambda >= 1.0 or args.league > 0 or args.search_actors):
+        print("--oracle needs --td-lambda below 1 and no --league / --search-actors", flush=True)
+        sys.exit(2)
     if args.td_lambda < 1.0 and args.league > 0:
         print("--td-lambda below 1 cannot be combined with --league", flush=True)
         sys.exit(2)
@@ -533,6 +569,21 @@ def run(args):
     if args.ntp > 0:
         model.add_ntp_head()
     cfg = model.cfg
+    oracle = oracle_opt = None
+    oracle_path = os.path.join(run_dir, "oracle_latest.pt")
+    if args.oracle:
+        if os.path.exists(oracle_path):
+            oracle, _m, o_state = load_checkpoint(oracle_path, "cpu", with_optimizer=True)
+        else:
+            oracle, o_state = make_oracle(model), None
+        oracle.to(device).train()
+        oracle_opt = torch.optim.Adam(oracle.parameters(), lr=args.oracle_lr)
+        if o_state is not None:
+            try:
+                oracle_opt.load_state_dict(o_state)
+            except Exception:
+                pass
+        oracle_scaler = None
     model.to(device).train()
     # a trained model is fine-tuned with a smaller step (hill-climb round 4: 5e-5 beat 2e-4 by
     # +0.10 levels/round when continuing from a strong model)
@@ -562,6 +613,12 @@ def run(args):
     shared = GuandanNet(cfg)
     shared.load_state_dict({k: v.detach().cpu() for k, v in model.state_dict().items()})
     shared.share_memory()
+    shared_oracle = None
+    if oracle is not None:
+        shared_oracle = GuandanNet(oracle.cfg)
+        shared_oracle.load_state_dict({k: v.detach().cpu() for k, v in oracle.state_dict().items()})
+        shared_oracle.share_memory()
+        oracle_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     version = ctx.Value("i", 0)
     q = ctx.Queue(maxsize=max(4, args.actors * 3))
     stop = ctx.Event()
@@ -573,7 +630,8 @@ def run(args):
                  td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus)
     procs = []
     for i in range(args.actors):
-        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict), daemon=True)
+        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict, shared_oracle),
+                        daemon=True)
         p.start()
         procs.append(p)
     for i in range(args.search_actors):
@@ -590,10 +648,12 @@ def run(args):
         save_checkpoint(os.path.join(run_dir, "model.pt"), model, meta, half=True)
         if snapshot:
             save_checkpoint(os.path.join(run_dir, f"model_{frames // 1000}k.pt"), model, meta, half=True)
+        if oracle is not None:
+            save_checkpoint(oracle_path, oracle, meta, optimizer=oracle_opt)
 
     if device.startswith("cuda"):
         set_priority("high")
-    buf = Replay(args.buffer, device, hidden=args.aux > 0)
+    buf = Replay(args.buffer, device, hidden=args.aux > 0 or args.oracle)
     sbuf = Replay(max(20_000, args.buffer // 2), device) if args.search_actors else None
     s_received = 0
     busy = 0.0
@@ -604,6 +664,8 @@ def run(args):
     loss_acc, loss_n = 0.0, 0
     aux_acc = 0.0
     ntp_acc = 0.0
+    oracle_acc = 0.0
+    ret_acc = 0.0  # the playing network's error on the same round outcomes, for comparison
     t_start = time.time()
     t_last_log = t_start
     t_last_save = t_start
@@ -642,14 +704,16 @@ def run(args):
                         item = q.get_nowait()
                 except queue_mod.Empty:
                     break
-                src, s_p, h_p, a_p, t, r_cnt, st_cnt, x_p = item
+                src, s_p, h_p, a_p, t, r_cnt, st_cnt, x_p, r_out = item
                 t = t / 3.0
+                if r_out is not None:
+                    r_out = r_out / 3.0
                 if src < 0 and sbuf is not None:  # search labels
                     sbuf.add(s_p, h_p, a_p, t)
                     s_received += len(t)
                     got += 1
                     continue
-                buf.add(s_p, h_p, a_p, t, x_p)
+                buf.add(s_p, h_p, a_p, t, x_p, r_out)
                 received += len(t)
                 frames += len(t)
                 rounds += r_cnt
@@ -690,6 +754,19 @@ def run(args):
                     aux_loss = torch.nn.functional.binary_cross_entropy_with_logits(bl.float(), xt)
                     aux_acc += float(aux_loss.detach())
                     loss = loss + args.aux * aux_loss
+                if oracle is not None:
+                    rt = buf.r[buf.last_idx]
+                    with torch.autocast("cuda", dtype=torch.float16, enabled=use_amp):
+                        po = oracle(torch.cat([st, xt], dim=1), ht, at)
+                    o_loss = torch.nn.functional.mse_loss(po.float(), rt)
+                    oracle_opt.zero_grad(set_to_none=True)
+                    oracle_scaler.scale(o_loss).backward()
+                    oracle_scaler.unscale_(oracle_opt)
+                    torch.nn.utils.clip_grad_norm_(oracle.parameters(), 40.0)
+                    oracle_scaler.step(oracle_opt)
+                    oracle_scaler.update()
+                    oracle_acc += float(o_loss.detach())
+                    ret_acc += float(torch.nn.functional.mse_loss(pred.detach().float(), rt))
                 opt.zero_grad(set_to_none=True)
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
@@ -705,6 +782,9 @@ def run(args):
                     with torch.no_grad():
                         for ps, pm in zip(shared.parameters(), model.parameters()):
                             ps.copy_(pm.detach().cpu())
+                        if oracle is not None:
+                            for ps, pm in zip(shared_oracle.parameters(), oracle.parameters()):
+                                ps.copy_(pm.detach().cpu())
                     version.value += 1
             now = time.time()
             if budget:
@@ -723,8 +803,13 @@ def run(args):
                        "search_labels": s_received,
                        "aux_loss": aux_acc / max(1, loss_n) if args.aux > 0 else None,
                        "ntp_loss": ntp_acc / max(1, loss_n) if args.ntp > 0 else None,
+                       "oracle_loss": oracle_acc / max(1, loss_n) if oracle is not None else None,
+                       "net_return_loss": ret_acc / max(1, loss_n) if oracle is not None else None,
                        "alive": sum(p.is_alive() for p in procs[:-1])}
                 log_line(metrics, row)
+                if oracle is not None:
+                    print(f"[oracle] return mse: oracle {row['oracle_loss']:.4f} vs playing net "
+                          f"{row['net_return_loss']:.4f}", flush=True)
                 print(f"[train] frames={frames:,} fps={row['fps']:.0f} loss={row['loss']:.4f} "
                       f"rounds/s={row['rounds_per_sec']:.1f} learner={row['learner_busy']*100:.0f}% "
                       f"updates={n_updates}", flush=True)
@@ -733,6 +818,7 @@ def run(args):
                 loss_acc, loss_n = 0.0, 0
                 aux_acc = 0.0
                 ntp_acc = 0.0
+                oracle_acc = ret_acc = 0.0
                 busy = 0.0
                 t_last_log = now
                 if received == 0 and now - t_start > 240:

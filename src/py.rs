@@ -117,6 +117,17 @@ impl PyVecEnv {
         PyBytes::new(py, &self.inner.take_hidden())
     }
 
+    /// Round outcomes (levels, from each sample's team) of the samples of the last take_samples.
+    fn take_returns<'py>(&mut self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &f32_bytes(&self.inner.take_returns()))
+    }
+
+    /// Hands of the other three players seen from the player to move in every environment
+    /// (324 bits each, as in the hidden-hand labels).
+    fn observe_hidden<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.observe_hidden())
+    }
+
     /// Only the given seats of environment `i` produce training samples from now on.
     fn set_learners(&mut self, i: usize, seats: [bool; 4]) {
         self.inner.set_learners(i, seats);
