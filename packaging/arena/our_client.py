@@ -207,7 +207,8 @@ class Player:
         rest = [pi["rest"] for pi in msg["publicInfo"]]
         ga, gp = msg.get("greaterAction"), msg.get("greaterPos", -1)
         lm = g.last_move()
-        ref = None if (gp in (-1, None) or not ga or ga[0] == "PASS") else (gp, sorted(cards(ga[2])))
+        leading = msg["actionList"][0][0] != "PASS"  # greaterAction can be stale from the last round
+        ref = None if (leading or gp in (-1, None) or not ga or ga[0] == "PASS") else (gp, sorted(cards(ga[2])))
         ours = None if lm is None else (g.last_player, sorted(lm[2]))
         if list(g.hand_counts()) != rest or ref != ours:
             self.desync(f"state: engine counts {list(g.hand_counts())} trick {ours}; "
