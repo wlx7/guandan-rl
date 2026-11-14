@@ -72,6 +72,48 @@ def install_shims(net):
     sys.modules["zmq"] = zmq
 
 
+def install_round_log(path, name):
+    """With ARENA_ROUND_LOG set, record every finished round from this client's point of view
+    (same format as our_client.py), so that DanZero can also be measured against other bots."""
+    import json  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    from ws4py.client import threadedclient  # noqa: PLC0415
+
+    class Logged(threadedclient.WebSocketClient):
+        def __init_subclass__(cls, **kw):
+            super().__init_subclass__(**kw)
+            inner = cls.received_message
+
+            def received_message(self, message):
+                try:
+                    msg = json.loads(str(message))
+                    if msg.get("stage") == "beginning":
+                        self._arena_pos = msg["myPos"]
+                    elif msg.get("stage") == "episodeOver" and hasattr(self, "_arena_pos"):
+                        order, pos = msg["order"], self._arena_pos
+                        first = order[0]
+                        gain = {1: 3, 2: 2, 3: 1}[order.index((first + 2) % 4)]
+                        win = (first & 1) == (pos & 1)
+                        rec = {"event": "round", "pos": pos, "order": order, "rank": msg.get("curRank"),
+                               "win": win, "levels": gain if win else -gain, "client": name, "t": time.time()}
+                    elif msg.get("stage") == "gameResult" and hasattr(self, "_arena_pos"):
+                        rec = {"event": "gameResult", "victoryNum": msg["victoryNum"], "pos": self._arena_pos,
+                               "client": name, "t": time.time()}
+                    else:
+                        rec = None
+                    if rec:
+                        with open(path, "a") as f:
+                            f.write(json.dumps(rec) + "\n")
+                except Exception:  # noqa: BLE001
+                    pass
+                return inner(self, message)
+
+            cls.received_message = received_message
+
+    threadedclient.WebSocketClient = Logged
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", required=True)
@@ -80,6 +122,8 @@ def main():
     ap.add_argument("--name", default=None, help="user_info in the URL (default: the client's own)")
     args = ap.parse_args()
     install_shims(DanZeroNet(args.weights))
+    if os.environ.get("ARENA_ROUND_LOG"):
+        install_round_log(os.environ["ARENA_ROUND_LOG"], args.name or "danzero")
     sys.path.insert(0, os.path.abspath(args.src))
     path = os.path.join(args.src, args.client)
     if args.name:

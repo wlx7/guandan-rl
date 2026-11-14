@@ -49,11 +49,22 @@ def start_table(k, args):
     for seat in range(4):
         mine = (seat % 2 == 0) == ours_first
         nm = names[seat]
-        cmd = ours_cmd(nm, log, extra) if mine else opp_cmd(args.opp, nm, args.ext)
-        procs.append(subprocess.Popen(cmd, cwd=d, env=env, stdout=open(os.path.join(d, f"{nm}.log"), "w"),
+        if not mine:
+            cmd, cenv = opp_cmd(args.opp, nm, args.ext), env
+        elif args.side_a == "ours":
+            cmd, cenv = ours_cmd(nm, log, extra), env
+        else:  # another external AI in our seats, logging its rounds like our client does
+            cmd, cenv = opp_cmd(args.side_a, nm, args.ext), dict(env, ARENA_ROUND_LOG=log)
+        procs.append(subprocess.Popen(cmd, cwd=d, env=cenv, stdout=open(os.path.join(d, f"{nm}.log"), "w"),
                                       stderr=subprocess.STDOUT))
         time.sleep(1.0)
+    procs = TableProcs(procs)
+    procs.log = log
     return procs
+
+
+class TableProcs(list):
+    log = ""
 
 
 def main():
@@ -67,17 +78,26 @@ def main():
     ap.add_argument("--shim", default=os.path.join(HERE, "portshim.so"))
     ap.add_argument("--base-port", type=int, default=24000)
     ap.add_argument("--no-endgame", action="store_true")
+    ap.add_argument("--side-a", default="ours", help="who sits in our seats: ours (default) or danzero")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
     tables = [start_table(k, args) for k in range(args.tables)]
     t0 = time.time()
-    while any(p[0].poll() is None for p in tables):
+    def table_done(procs):
+        if procs[0].poll() is not None or all(p.poll() is not None for p in procs[1:]):
+            return True
+        try:  # the referee and some clients stay up after the last game
+            return '"gameResult"' in open(procs.log).read()
+        except OSError:
+            return False
+
+    while not all(table_done(p) for p in tables):
         time.sleep(10)
-        done = sum(p[0].poll() is not None for p in tables)
+        done = sum(table_done(p) for p in tables)
         print(f"{time.time() - t0:7.0f}s  tables finished {done}/{len(tables)}", flush=True)
     time.sleep(5)
     for procs in tables:
-        for p in procs[1:]:
+        for p in procs:
             if p.poll() is None:
                 p.kill()
     print("all done", flush=True)
