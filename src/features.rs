@@ -10,7 +10,7 @@ pub const STATE_DIM: usize = 1550;
 /// Moves of history encoded for every decision (a round has about 80 incl. passes, at most
 /// ~115). Each network reads only the most recent `hist_len` of them (24 before v1.12), so
 /// older models play exactly as before.
-pub const HIST_LEN: usize = 96;
+pub const HIST_LEN: usize = 128;
 pub const HIST_DIM: usize = 140;
 pub const ACTION_DIM: usize = 413;
 /// Training-only label: the hands of the other three players (108 bits each).
