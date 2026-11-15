@@ -31,8 +31,13 @@ class ModelConfig:
     # perfect-information value network (training only): the state input also holds the other
     # three hands (HIDDEN_DIM bits appended to the state); see make_oracle and train.py --oracle
     oracle: bool = False
-    # moves of history the LSTM reads (the most recent ones); the engine encodes HIST_LEN
+    # moves of history the network reads (the most recent ones); the engine encodes HIST_LEN
     hist_len: int = 24
+    # history encoder: "lstm" (default) or "tf" (a small causal Transformer, experimental)
+    arch: str = "lstm"
+    tf_dim: int = 128
+    tf_layers: int = 4
+    tf_heads: int = 4
 
     def to_dict(self):
         return asdict(self)
@@ -65,20 +70,50 @@ def mlp(sizes, last_act=True):
     return nn.Sequential(*layers)
 
 
+class HistTransformer(nn.Module):
+    """History encoder: one token per move (oldest first, zero rows = no move yet), plus a
+    learned summary token at the end whose output encodes the whole history. Causal attention,
+    so the output at every move can also predict the next one (the --ntp auxiliary task)."""
+
+    def __init__(self, d: int, layers: int, heads: int, max_len: int):
+        super().__init__()
+        self.inp = nn.Linear(HIST_DIM, d)
+        self.pos = nn.Parameter(torch.randn(max_len + 1, d) * 0.02)
+        self.summary = nn.Parameter(torch.randn(d) * 0.02)
+        layer = nn.TransformerEncoderLayer(d, heads, 4 * d, dropout=0.0, activation="gelu",
+                                           batch_first=True, norm_first=True)
+        self.enc = nn.TransformerEncoder(layer, layers, enable_nested_tensor=False)
+        self.norm = nn.LayerNorm(d)
+
+    def forward(self, hist: torch.Tensor):
+        """hist [B,T,HIST_DIM] -> (summary [B,d], per-move outputs [B,T,d])"""
+        b, t, _ = hist.shape
+        x = torch.cat([self.inp(hist), self.summary.expand(b, 1, -1)], dim=1) + self.pos[: t + 1]
+        mask = nn.Transformer.generate_square_subsequent_mask(t + 1, device=hist.device, dtype=x.dtype)
+        y = self.norm(self.enc(x, mask=mask, is_causal=True))
+        return y[:, -1], y[:, :-1]
+
+
 class GuandanNet(nn.Module):
     def __init__(self, cfg: ModelConfig | None = None):
         super().__init__()
         cfg = cfg or PRESETS[RECOMMENDED_PRESET]
         self.cfg = cfg
         h = cfg.hidden
-        self.lstm = nn.LSTM(HIST_DIM, cfg.lstm, batch_first=True)
-        self.state_mlp = mlp([STATE_DIM + (HIDDEN_DIM if cfg.oracle else 0) + cfg.lstm, h, h])
+        if cfg.arch == "tf":
+            self.hist_enc = HistTransformer(cfg.tf_dim, cfg.tf_layers, cfg.tf_heads, cfg.hist_len)
+            hd = cfg.tf_dim
+        else:
+            self.lstm = nn.LSTM(HIST_DIM, cfg.lstm, batch_first=True)
+            hd = cfg.lstm
+        self.hist_out = hd
+        self.state_mlp = mlp([STATE_DIM + (HIDDEN_DIM if cfg.oracle else 0) + hd, h, h])
         head = [h + ACTION_DIM] + [h] * (cfg.head_layers - 1) + [h // 2]
         self.head = nn.Sequential(mlp(head), nn.Linear(h // 2, 1))
         if cfg.belief:
             self.belief = nn.Linear(h, HIDDEN_DIM)
         if cfg.ntp:
-            self.ntp = nn.Linear(cfg.lstm, HIST_DIM)
+            self.ntp = nn.Linear(hd, HIST_DIM)
 
     def add_belief_head(self):
         """Add the auxiliary hidden-hand head to a model trained without it."""
@@ -91,25 +126,33 @@ class GuandanNet(nn.Module):
         """Add the auxiliary next-move head (predicts history step t+1 from the LSTM at t)."""
         if not self.cfg.ntp:
             self.cfg.ntp = True
-            self.ntp = nn.Linear(self.cfg.lstm, HIST_DIM)
+            self.ntp = nn.Linear(self.hist_out, HIST_DIM)
         return self
 
     def _window(self, hist: torch.Tensor) -> torch.Tensor:
         n = getattr(self.cfg, "hist_len", 24)
         return hist[:, -n:] if hist.shape[1] > n else hist
 
+    def _history(self, hist: torch.Tensor):
+        """(summary of the history [B,d], output at every move [B,T,d])"""
+        hist = self._window(hist)
+        if self.cfg.arch == "tf":
+            return self.hist_enc(hist)
+        out, (hn, _) = self.lstm(hist)
+        return hn[-1], out
+
     def encode_state_seq(self, state: torch.Tensor, hist: torch.Tensor):
-        """State encoding plus the LSTM output at every history step (for the next-move task)."""
-        out, (hn, _) = self.lstm(self._window(hist))
-        return self.state_mlp(torch.cat([state, hn[-1]], dim=-1)), out
+        """State encoding plus the history encoder's output at every step (next-move task)."""
+        hn, out = self._history(hist)
+        return self.state_mlp(torch.cat([state, hn], dim=-1)), out
 
     def belief_logits(self, z: torch.Tensor) -> torch.Tensor:
         """Logits of the other three hands (108 bits each, as in the state encoding)."""
         return self.belief(z)
 
     def encode_state(self, state: torch.Tensor, hist: torch.Tensor) -> torch.Tensor:
-        _, (hn, _) = self.lstm(self._window(hist))
-        return self.state_mlp(torch.cat([state, hn[-1]], dim=-1))
+        hn, _ = self._history(hist)
+        return self.state_mlp(torch.cat([state, hn], dim=-1))
 
     def score(self, z: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         return self.head(torch.cat([z, actions], dim=-1)).squeeze(-1)
@@ -148,6 +191,8 @@ def widen(small: "GuandanNet", cfg: ModelConfig, noise: float = 0.0, seed: int =
     (exact after a ReLU). The split between copies is random (the shares still sum to one),
     which keeps the function exact but gives the copies different gradients, so they can
     learn different things. `noise` optionally perturbs all weights (relative to their scale)."""
+    if small.cfg.arch != "lstm":
+        raise ValueError("only LSTM models can be widened")
     s = small.cfg
     if cfg.hidden < s.hidden or cfg.lstm < s.lstm or cfg.head_layers < s.head_layers:
         raise ValueError("只能加宽到更大的模型")

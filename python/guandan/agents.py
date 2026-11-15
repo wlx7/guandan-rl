@@ -73,25 +73,31 @@ class BatchPolicy:
         network's `top_k` best, and with probability `epsilon` a uniformly random legal move.
         With `return_q` also returns the network's value of each chosen move."""
         q = self.q_values(s, h, a, off)
-        ch = segment_argmax(q, off)
-        if epsilon > 0 or (epsilon_top > 0 and top_k > 1):
-            rng = rng or np.random.default_rng()
-            n = np.diff(off)
-            u = rng.random(len(ch))
-            if epsilon_top > 0 and top_k > 1:
-                near = np.nonzero((u < epsilon_top) & (n > 1))[0]
-                for i in near:
-                    qi = q[off[i]:off[i + 1]]
-                    k = min(top_k, len(qi))
-                    best = np.argpartition(-qi, k - 1)[:k]
-                    ch[i] = int(best[int(rng.integers(k))])
-                u = np.where(u < epsilon_top, 1.0, u - epsilon_top)
-            explore = u < epsilon
-            if explore.any():
-                ch[explore] = (rng.random(explore.sum()) * n[explore]).astype(np.int64)
+        ch = choose_from_q(q, off, epsilon, rng, top_k, epsilon_top)
         if return_q:
             return ch, q[off[:-1] + ch]
         return ch
+
+
+def choose_from_q(q, off, epsilon=0.0, rng: np.random.Generator | None = None, top_k=0, epsilon_top=0.0):
+    """BatchPolicy.choose on values already computed (q for every legal move, segmented by off)."""
+    ch = segment_argmax(q, off)
+    if epsilon > 0 or (epsilon_top > 0 and top_k > 1):
+        rng = rng or np.random.default_rng()
+        n = np.diff(off)
+        u = rng.random(len(ch))
+        if epsilon_top > 0 and top_k > 1:
+            near = np.nonzero((u < epsilon_top) & (n > 1))[0]
+            for i in near:
+                qi = q[off[i]:off[i + 1]]
+                k = min(top_k, len(qi))
+                best = np.argpartition(-qi, k - 1)[:k]
+                ch[i] = int(best[int(rng.integers(k))])
+            u = np.where(u < epsilon_top, 1.0, u - epsilon_top)
+        explore = u < epsilon
+        if explore.any():
+            ch[explore] = (rng.random(explore.sum()) * n[explore]).astype(np.int64)
+    return ch
 
 
 # exact endgame search when playing (see endgame.rs / endgame.py): once at most `cards` cards

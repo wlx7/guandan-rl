@@ -27,6 +27,8 @@ class NumpyNet:
         f = {k: np.ascontiguousarray(np.asarray(v, np.float32)) for k, v in sd.items()
              if hasattr(v, "dtype") and v.dtype.kind == "f"}
         self.cfg = dict(cfg)
+        if self.cfg.get("arch", "lstm") != "lstm":
+            raise RuntimeError("这个模型是 Transformer 结构（实验），需要 PyTorch 才能运行")
         self.L = f["lstm.weight_hh_l0"].shape[1]
         if f["lstm.weight_ih_l0"].shape[1] != HIST_DIM or self._lin_in(f, "state_mlp") != STATE_DIM + self.L:
             raise RuntimeError("模型与当前程序的输入格式不一致")

@@ -40,7 +40,7 @@ import torch.multiprocessing as mp
 from . import _core
 from .model import (GuandanNet, PRESETS, RECOMMENDED_PRESET, ModelConfig, STATE_DIM, HIST_LEN,
                     HIST_DIM, ACTION_DIM, HIDDEN_DIM, save_checkpoint, load_checkpoint, count_params, widen, make_oracle)
-from .agents import BatchPolicy, unpack_obs, subset_obs
+from .agents import BatchPolicy, unpack_obs, subset_obs, choose_from_q
 from .paths import runs_dir, safe_run_name
 
 H_FLAT = HIST_LEN * HIST_DIM
@@ -79,6 +79,18 @@ def build_parser():
     ap.add_argument("--oracle", action="store_true",
                     help="experimental: bootstrap TD(lambda) targets from a perfect-information value network "
                          "(needs --td-lambda below 1)")
+    ap.add_argument("--arch", default="lstm", choices=["lstm", "tf"],
+                    help="history encoder of a new model: lstm (default) or tf (Transformer, experimental)")
+    ap.add_argument("--tf-dim", type=int, default=128)
+    ap.add_argument("--tf-layers", type=int, default=4)
+    ap.add_argument("--tf-heads", type=int, default=4)
+    ap.add_argument("--distill", default="",
+                    help="teacher checkpoint: a new model first learns the teacher's values of its moves "
+                         "(the teacher plays), then switches to self-play (see --distill-frames)")
+    ap.add_argument("--distill-frames", type=float, default=3e8,
+                    help="samples of distillation before switching to self-play (or create <run>/SWITCH)")
+    ap.add_argument("--distill-k", type=int, default=8,
+                    help="moves per decision labelled by the teacher: its best half plus random others")
     ap.add_argument("--hist-len", type=int, default=0,
                     help="moves of history the network reads (0 = keep the model's; new models 24)")
     ap.add_argument("--freeze-policy", action="store_true",
@@ -144,7 +156,7 @@ def pool_paths(run_dir, base, extra, keep=8):
     return [p for p in dict.fromkeys(paths) if os.path.exists(p)]
 
 
-def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, shared_oracle=None):
+def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, shared_oracle=None, phase=None):
     try:
         set_priority("low")
         torch.set_num_threads(1)
@@ -162,6 +174,12 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
         if shared_oracle is not None:
             oracle = GuandanNet(ModelConfig(**shared_oracle.cfg.to_dict())).to(dev)
             oracle.eval()
+        teacher = None
+        if args.get("distill") and phase is not None and phase.value == 0:
+            tm, _ = load_checkpoint(args["distill"], dev)
+            teacher = BatchPolicy(tm, dev)
+        dk = int(args.get("distill_k", 8))
+        dbuf = []  # distillation rows waiting to be sent
         n_env = args["envs"]
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
         aux = float(args.get("aux", 0.0)) > 0 or oracle is not None
@@ -228,6 +246,45 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 if oracle is not None:
                     oracle.load_state_dict(shared_oracle.state_dict())
             players, s, h, a, off = unpack_obs(env.observe())
+            if teacher is not None and phase.value == 0:
+                # distillation: the teacher plays; a sample of every decision's moves is labelled
+                # with the teacher's values (its best half and random others, so that the student
+                # also learns which moves are bad)
+                qt = teacher.q_values(s, h, a, off)
+                ch = choose_from_q(qt, off, args["epsilon"], rng, top_k, eps_top)
+                x = np.frombuffer(env.observe_hidden(), np.uint8).reshape(n_env, HIDDEN_DIM)
+                n_mv = np.diff(off)
+                ri, ai = [], []
+                for i in np.nonzero(n_mv > 1)[0]:
+                    qi = qt[off[i]:off[i + 1]]
+                    k = min(dk, len(qi))
+                    top = np.argsort(-qi)[: (k + 1) // 2]
+                    rest = np.setdiff1d(np.arange(len(qi)), top)
+                    extra = rng.choice(rest, min(k - len(top), len(rest)), replace=False)
+                    sel = np.concatenate([top, extra]).astype(np.int64)
+                    ri.append(np.full(len(sel), i))
+                    ai.append(off[i] + sel)
+                if ri:
+                    ri, ai = np.concatenate(ri), np.concatenate(ai)
+                    dbuf.append((s[ri], h[ri], a[ai], qt[ai] * 3.0, x[ri]))
+                res = env.step(ch.tolist(), False)
+                rounds += len(res)
+                steps += len(ch)
+                if sum(len(d[3]) for d in dbuf) >= send_size:
+                    sb, hb, ab, tb, xb = (np.concatenate(z) for z in zip(*dbuf))
+                    dbuf = []
+                    item = (aid, np.packbits(sb, axis=1), np.packbits(hb.reshape(len(tb), H_FLAT), axis=1),
+                            np.packbits(ab, axis=1), tb.astype(np.float32), rounds, steps,
+                            np.packbits(xb, axis=1), None)
+                    while not stop.is_set():
+                        try:
+                            q.put(item, timeout=1.0)
+                            break
+                        except queue_mod.Full:
+                            continue
+                    rounds = 0
+                    steps = 0
+                continue
             if any(opp):
                 old = np.asarray([o is not None for o in opp]) & ((players % 2) != learn_team)
                 ch = np.zeros(n_env, np.int64)
@@ -475,6 +532,9 @@ def other_active_runs(exclude=None):
 def run(args):
     from .proc import run_alive, write_pid, remove_pid, resource_limits
     args.name = safe_run_name(args.name) or time.strftime("run-%Y%m%d-%H%M%S")
+    if args.distill and (args.base or args.oracle or args.league > 0 or args.search_actors):
+        print("--distill trains a new model: no --base / --oracle / --league / --search-actors", flush=True)
+        sys.exit(2)
     if args.oracle and (args.td_lambda >= 1.0 or args.league > 0 or args.search_actors):
         print("--oracle needs --td-lambda below 1 and no --league / --search-actors", flush=True)
         sys.exit(2)
@@ -567,8 +627,11 @@ def run(args):
         elif want and want.preset != model.cfg.preset:
             print(f"--preset {args.preset} ignored: a base model can only be widened, so it stays {model.cfg.preset}", flush=True)
     else:
-        model = GuandanNet(PRESETS[args.preset or RECOMMENDED_PRESET])
-    if args.hist_len:
+        base_cfg = PRESETS[args.preset or ("large" if args.distill else RECOMMENDED_PRESET)].to_dict()
+        model = GuandanNet(ModelConfig(**{
+            **base_cfg, "arch": args.arch, "tf_dim": args.tf_dim, "tf_layers": args.tf_layers,
+            "tf_heads": args.tf_heads, "hist_len": args.hist_len or (HIST_LEN if args.arch == "tf" else 24)}))
+    if args.hist_len and model.cfg.arch == "lstm":
         if args.hist_len > HIST_LEN:
             print(f"--hist-len {args.hist_len}: the engine encodes at most {HIST_LEN} moves", flush=True)
             sys.exit(2)
@@ -629,6 +692,7 @@ def run(args):
         shared_oracle.share_memory()
         oracle_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     version = ctx.Value("i", 0)
+    phase = ctx.Value("i", 0 if (args.distill and frames < args.distill_frames) else 1)  # 0 = distillation
     q = ctx.Queue(maxsize=max(4, args.actors * 3))
     stop = ctx.Event()
     adict = dict(envs=args.envs, epsilon=args.epsilon, actor_device=args.actor_device, seed=args.seed,
@@ -636,10 +700,13 @@ def run(args):
                  base=args.base, league=args.league, run_dir=run_dir,
                  pool=[p for p in args.pool.split(";") if p.strip()],
                  search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp,
-                 td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus)
+                 td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus,
+                 distill=args.distill, distill_k=args.distill_k)
+    if args.distill:
+        adict["base"] = args.distill  # the evaluator measures the student against its teacher
     procs = []
     for i in range(args.actors):
-        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict, shared_oracle),
+        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict, shared_oracle, phase),
                         daemon=True)
         p.start()
         procs.append(p)
@@ -730,6 +797,13 @@ def run(args):
                 got += 1
                 if got >= args.actors * 2:
                     break
+            # ---- distillation done: switch to self-play
+            switch_file = os.path.join(run_dir, "SWITCH")
+            if phase.value == 0 and (frames >= args.distill_frames or os.path.exists(switch_file)):
+                phase.value = 1
+                buf.pos = buf.size = 0  # the teacher's labels are not self-play returns
+                log_line(metrics, {"type": "phase", "t": time.time(), "frames": frames, "to": "selfplay"})
+                print(f"distillation finished at {frames:,} samples: switching to self-play", flush=True)
             # ---- train
             budget = 0
             tb = time.time()
@@ -753,8 +827,9 @@ def run(args):
                 loss = torch.nn.functional.mse_loss(pred.float(), tt)
                 if nl is not None:
                     # next-move prediction on the history: only pairs of real (non-padding) moves
-                    nxt = ht[:, 1:]
-                    valid = (ht[:, :-1].sum(-1) > 0) & (nxt.sum(-1) > 0)
+                    hw = model._window(ht)
+                    nxt = hw[:, 1:]
+                    valid = (hw[:, :-1].sum(-1) > 0) & (nxt.sum(-1) > 0)
                     if valid.any():
                         ntp_loss = torch.nn.functional.binary_cross_entropy_with_logits(nl[valid].float(), nxt[valid])
                         ntp_acc += float(ntp_loss.detach())
