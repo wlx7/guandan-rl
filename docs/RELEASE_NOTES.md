@@ -18,6 +18,13 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.12.1
+
+- 修正“开一桌”页面的提示：已经有牌桌在打时，以前会错误地提示“开新桌会结束它”。其实从 v1.7.2 起可以同时开几桌，新开一桌不影响原来的牌桌；现在提示改为“已有 N 桌在进行，新开一桌不影响它们（最多同时 8 桌）”，开满 8 桌时提示先关掉不用的牌桌。
+- AI 和模型与 v1.12.0 相同。
+
+**English.** The new-table page no longer claims that opening a table ends the one in progress (several tables have run side by side since v1.7.2); it now shows how many tables are open. The AI and the model are unchanged.
+
 ### v1.12.0
 
 - **随包模型变强**：AI 现在能记住整局的出牌顺序（最近 96 手，原来只记 24 手，一小局平均 82 手）。在 v1.11 模型上又自对弈 20 亿局面，3 万副从未用过的复式牌上对 v1.11 每局多赢 **0.067 级**，单局胜率 **51.6%**。对照实验证明是“记得更久”本身带来的：同样多练 6 亿局面，只记 24 手的对照组比记 96 手的少赢 0.033 级。
