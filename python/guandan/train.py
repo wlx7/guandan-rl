@@ -257,6 +257,8 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 # learns which moves are bad); the learner blends both targets
                 fr = progress.value
                 p_teach = max(0.0, 1.0 - fr / max(1.0, args["teacher_play_frames"]))
+                # label about as many decisions as the learner will use: its teacher share falls
+                p_label = min(1.0, 1.5 * max(0.0, 1.0 - fr / args["distill_frames"])) + 0.02
                 qs = policy.q_values(s, h, a, off)
                 qt = teacher.q_values(s, h, a, off)
                 ch = choose_from_q(qs, off, args["epsilon"], rng, top_k, eps_top)
@@ -266,7 +268,7 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 x = np.frombuffer(env.observe_hidden(), np.uint8).reshape(n_env, HIDDEN_DIM)
                 n_mv = np.diff(off)
                 ri, ai = [], []
-                for i in np.nonzero(n_mv > 1)[0]:
+                for i in np.nonzero((n_mv > 1) & (rng.random(n_env) < p_label))[0]:
                     qi = qt[off[i]:off[i + 1]]
                     k = min(dk, len(qi))
                     top = np.argsort(-qi)[: (k + 1) // 2]
