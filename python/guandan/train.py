@@ -91,7 +91,7 @@ def build_parser():
                     help="self-play samples over which the teacher's share of each batch falls from 1 to 0")
     ap.add_argument("--teacher-play-frames", type=float, default=1e8,
                     help="self-play samples over which the teacher's share of the moves played falls from 1 to 0")
-    ap.add_argument("--distill-k", type=int, default=6,
+    ap.add_argument("--distill-k", type=int, default=4,
                     help="moves per decision labelled by the teacher: its best half plus random others")
     ap.add_argument("--hist-len", type=int, default=0,
                     help="moves of history the network reads (0 = keep the model's; new models 24)")
@@ -180,7 +180,7 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
         if args.get("distill") and progress is not None and progress.value < args["distill_frames"]:
             tm, _ = load_checkpoint(args["distill"], dev)
             teacher = BatchPolicy(tm, dev)
-        dk = int(args.get("distill_k", 6))
+        dk = int(args.get("distill_k", 4))
         dbuf = []  # distillation rows waiting to be sent
         n_env = args["envs"]
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
@@ -257,8 +257,9 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 # learns which moves are bad); the learner blends both targets
                 fr = progress.value
                 p_teach = max(0.0, 1.0 - fr / max(1.0, args["teacher_play_frames"]))
-                # label about as many decisions as the learner will use: its teacher share falls
-                p_label = min(1.0, 1.5 * max(0.0, 1.0 - fr / args["distill_frames"])) + 0.02
+                # label only part of the decisions: the learner has to digest every label, and a
+                # few labelled moves per decision are plenty; fewer as the teacher's share falls
+                p_label = 0.5 * max(0.0, 1.0 - fr / args["distill_frames"]) + 0.02
                 qs = policy.q_values(s, h, a, off)
                 qt = teacher.q_values(s, h, a, off)
                 ch = choose_from_q(qs, off, args["epsilon"], rng, top_k, eps_top)
