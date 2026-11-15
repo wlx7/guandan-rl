@@ -300,6 +300,15 @@ impl PyGame {
         Ok(py.allow_threads(move || crate::endgame::endgame_choose(&g, net_choice, &cfg, e.as_ref(), seed)))
     }
 
+    /// The other three hands seen from player `me` (default: the player to move), 324 bits:
+    /// the extra input of a perfect-information (oracle) network.
+    #[pyo3(signature = (me = None))]
+    fn encode_hidden<'py>(&self, py: Python<'py>, me: Option<u8>) -> Bound<'py, PyBytes> {
+        let mut x = vec![0u8; HIDDEN_DIM];
+        encode_hidden(&self.g, me.unwrap_or(self.g.current), &mut x);
+        PyBytes::new(py, &x)
+    }
+
     /// Cards still held by all four players.
     fn cards_left(&self) -> u32 {
         self.g.hands.iter().map(hand_count).sum()

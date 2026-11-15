@@ -99,6 +99,7 @@ pub struct Net {
     state_mlp: Vec<Lin>, // ReLU after every layer
     head: Vec<Lin>,      // ReLU after every layer but the last
     belief: Option<Lin>, // prediction of the other hands (used by the endgame search), if exported
+    hist_len: usize,     // most recent history steps the LSTM reads (model config, default 24)
     pub config: String,
 }
 
@@ -198,6 +199,12 @@ impl Net {
             state_mlp,
             head,
             belief,
+            hist_len: meta
+                .get("config")
+                .and_then(|c| c.as_str())
+                .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+                .and_then(|c| c.get("hist_len").and_then(|v| v.as_u64()))
+                .map_or(24, |n| (n as usize).clamp(1, HIST_LEN)),
             config: meta.get("config").and_then(|c| c.as_str()).unwrap_or("{}").to_string(),
         })
     }
@@ -210,7 +217,7 @@ impl Net {
         let mut g = vec![0f32; 4 * l];
         let mut x = vec![0f32; HIST_DIM];
         let mut hh = vec![0f32; 4 * l];
-        for t in 0..HIST_LEN {
+        for t in HIST_LEN - self.hist_len..HIST_LEN {
             for (i, v) in hist[t * HIST_DIM..(t + 1) * HIST_DIM].iter().enumerate() {
                 x[i] = *v as f32;
             }

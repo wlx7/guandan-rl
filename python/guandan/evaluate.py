@@ -78,7 +78,7 @@ def _utf8_stdio():
             pass
 
 
-def make_player(spec, device="cpu", search="", endgame=""):
+def make_player(spec, device="cpu", search="", endgame="", oracle_search=""):
     """'rule' | 'random' | checkpoint path; `search` = 'top_k,samples,depth' enables search;
     `endgame` = 'cards,worlds[,guided floor]' enables the exact endgame search."""
     from .duplicate import NetPlayer, RulePlayer, RandomPlayer, SearchPlayer, EndgamePlayer
@@ -88,6 +88,22 @@ def make_player(spec, device="cpu", search="", endgame=""):
     if spec == "random":
         return RandomPlayer()
     m, _ = load_checkpoint(spec, device)
+    if oracle_search:
+        from .duplicate import OracleSearchPlayer
+        from .oracle_search import OracleSearch
+        parts = oracle_search.split(",")
+        o, _ = load_checkpoint(parts[0], device)
+        o.eval()
+        k = int(parts[1]) if len(parts) > 1 else 4
+        w = int(parts[2]) if len(parts) > 2 else 32
+        beta = float(parts[3]) if len(parts) > 3 else 1.0
+        eg = None
+        if endgame:
+            from .endgame import EndgameSearch
+            ep = endgame.split(",")
+            eg = EndgameSearch(m, device, cards=int(ep[0]), worlds=int(ep[1]),
+                               guided=float(ep[2]) if len(ep) > 2 else 0.02)
+        return OracleSearchPlayer(m, OracleSearch(m, o, device, top_k=k, worlds=w, beta=beta), device, eg)
     if endgame:
         from .endgame import EndgameSearch
         parts = endgame.split(",")
@@ -125,15 +141,21 @@ def main():
     ap.add_argument("--opponent-search", default="", help="search for the opponent")
     ap.add_argument("--endgame", default="", help="exact endgame search for the model: cards,worlds[,guided floor], "
                          "e.g. 20,16 (searched once at most `cards` cards are left in all hands)")
+    ap.add_argument("--oracle-search", default="",
+                    help="experimental search for the model with an oracle network (train.py --oracle): "
+                         "oracle.pt[,top_k,worlds,beta], e.g. runs/x/oracle_latest.pt,4,32,1.0")
+    ap.add_argument("--opponent-endgame", default="", help="exact endgame search for the opponent")
     args = ap.parse_args()
     torch.set_grad_enabled(False)
-    a = make_player(args.model, args.device, args.search, args.endgame)
-    b = make_player(args.opponent, args.device, args.opponent_search)
+    a = make_player(args.model, args.device, args.search, args.endgame, args.oracle_search)
+    b = make_player(args.opponent, args.device, args.opponent_search, args.opponent_endgame)
     r = duplicate_match(a, b, deals=args.deals, seed=args.seed, batch=args.batch,
                         log=lambda t: print(t, flush=True))
     print(f"RESULT vs {args.opponent}: score {r['score']:+.3f} ± {r['score_se']:.3f} levels/round, "
           f"win {r['win_rate']*100:.2f}% ± {r['win_rate_se']*100:.2f} pp (paired SE)  "
           f"({r['deals']} deals = {r['rounds']} rounds, {r['seconds']:.0f}s)", flush=True)
+    if args.oracle_search:
+        print(f"oracle search: {a.searcher.stats}", flush=True)
     es = getattr(a, "searcher", None)
     if es is not None and hasattr(es, "stats"):
         print(f"endgame search: {es.stats}", flush=True)

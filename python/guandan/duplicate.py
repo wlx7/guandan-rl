@@ -76,6 +76,25 @@ class EndgamePlayer:
         return np.asarray(self.searcher.choose_many(games, ch), np.int64)
 
 
+class OracleSearchPlayer:
+    """Network play refined by the oracle search (oracle_search.OracleSearch); optionally the
+    exact endgame search takes over when few cards are left."""
+
+    def __init__(self, model, searcher, device="cpu", endgame=None):
+        self.net = NetPlayer(model, device)
+        self.searcher = searcher
+        self.endgame = endgame
+
+    def act(self, ro, obs, rows):
+        ch = self.net.act(ro, obs, rows)
+        idx = obs[0]
+        games = [ro.game(int(idx[r])) for r in rows]
+        ch = self.searcher.choose_many(games, ch)
+        if self.endgame is not None:
+            ch = self.endgame.choose_many(games, ch)
+        return np.asarray(ch, np.int64)
+
+
 def make_deals(n, seed):
     rng = np.random.default_rng(seed)
     deals = []

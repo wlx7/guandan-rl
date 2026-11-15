@@ -31,6 +31,8 @@ class ModelConfig:
     # perfect-information value network (training only): the state input also holds the other
     # three hands (HIDDEN_DIM bits appended to the state); see make_oracle and train.py --oracle
     oracle: bool = False
+    # moves of history the LSTM reads (the most recent ones); the engine encodes HIST_LEN
+    hist_len: int = 24
 
     def to_dict(self):
         return asdict(self)
@@ -92,9 +94,13 @@ class GuandanNet(nn.Module):
             self.ntp = nn.Linear(self.cfg.lstm, HIST_DIM)
         return self
 
+    def _window(self, hist: torch.Tensor) -> torch.Tensor:
+        n = getattr(self.cfg, "hist_len", 24)
+        return hist[:, -n:] if hist.shape[1] > n else hist
+
     def encode_state_seq(self, state: torch.Tensor, hist: torch.Tensor):
         """State encoding plus the LSTM output at every history step (for the next-move task)."""
-        out, (hn, _) = self.lstm(hist)
+        out, (hn, _) = self.lstm(self._window(hist))
         return self.state_mlp(torch.cat([state, hn[-1]], dim=-1)), out
 
     def belief_logits(self, z: torch.Tensor) -> torch.Tensor:
@@ -102,7 +108,7 @@ class GuandanNet(nn.Module):
         return self.belief(z)
 
     def encode_state(self, state: torch.Tensor, hist: torch.Tensor) -> torch.Tensor:
-        _, (hn, _) = self.lstm(hist)
+        _, (hn, _) = self.lstm(self._window(hist))
         return self.state_mlp(torch.cat([state, hn[-1]], dim=-1))
 
     def score(self, z: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
@@ -147,7 +153,7 @@ def widen(small: "GuandanNet", cfg: ModelConfig, noise: float = 0.0, seed: int =
         raise ValueError("只能加宽到更大的模型")
     g = torch.Generator().manual_seed(seed)
     big = GuandanNet(ModelConfig(hidden=cfg.hidden, lstm=cfg.lstm, head_layers=cfg.head_layers,
-                                 preset=cfg.preset, belief=s.belief, ntp=s.ntp))
+                                 preset=cfg.preset, belief=s.belief, ntp=s.ntp, hist_len=s.hist_len))
 
     def mapping(n_old, n_new):
         """(old unit of every new unit, share of the old unit's outgoing weight it carries)"""

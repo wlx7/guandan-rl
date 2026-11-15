@@ -60,6 +60,9 @@ class NumpyNet:
         """state [B,S], hist [B,T,H] -> z [B,hidden]"""
         state = np.asarray(state, np.float32)
         hist = np.asarray(hist, np.float32)
+        n = int(self.cfg.get("hist_len", 24))
+        if hist.shape[1] > n:  # the engine encodes more history than this model reads
+            hist = hist[:, -n:]
         B, T, _ = hist.shape
         L = self.L
         xs = hist.reshape(B * T, -1) @ self.w_ih

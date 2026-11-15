@@ -79,6 +79,10 @@ def build_parser():
     ap.add_argument("--oracle", action="store_true",
                     help="experimental: bootstrap TD(lambda) targets from a perfect-information value network "
                          "(needs --td-lambda below 1)")
+    ap.add_argument("--hist-len", type=int, default=0,
+                    help="moves of history the network reads (0 = keep the model's; new models 24)")
+    ap.add_argument("--freeze-policy", action="store_true",
+                    help="with --oracle: do not update the playing network (fit an oracle to a fixed policy)")
     ap.add_argument("--oracle-lr", type=float, default=1e-4, help="learning rate of the --oracle network")
     ap.add_argument("--search-actors", type=int, default=0,
                     help="self-play processes that label the top candidate moves with search values (expert iteration)")
@@ -564,6 +568,11 @@ def run(args):
             print(f"--preset {args.preset} ignored: a base model can only be widened, so it stays {model.cfg.preset}", flush=True)
     else:
         model = GuandanNet(PRESETS[args.preset or RECOMMENDED_PRESET])
+    if args.hist_len:
+        if args.hist_len > HIST_LEN:
+            print(f"--hist-len {args.hist_len}: the engine encodes at most {HIST_LEN} moves", flush=True)
+            sys.exit(2)
+        model.cfg.hist_len = args.hist_len
     if args.aux > 0:
         model.add_belief_head()
     if args.ntp > 0:
@@ -767,12 +776,13 @@ def run(args):
                     oracle_scaler.update()
                     oracle_acc += float(o_loss.detach())
                     ret_acc += float(torch.nn.functional.mse_loss(pred.detach().float(), rt))
-                opt.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(opt)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 40.0)
-                scaler.step(opt)
-                scaler.update()
+                if not args.freeze_policy:
+                    opt.zero_grad(set_to_none=True)
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(opt)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 40.0)
+                    scaler.step(opt)
+                    scaler.update()
                 trained += args.batch
                 budget += 1
                 n_updates += 1
