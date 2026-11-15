@@ -211,10 +211,10 @@ function closeTable(r, refresh) {
 async function viewSetup() {
   const cfg = { think: 'fast', scoring: 'none', mode: 'real', length: 'quick', seats: ['human', 'ai', 'ai', 'ai'], model: '', seatModels: ['', '', '', ''], ai_speed: 1, name: nameStore.get() || T('房主'), hostPlays: true };
   let models = [];
-  let room = null;
+  let tables = { rooms: [], max: 8 };
   let info = {};
   let me = {};
-  try { [models, room, info, me] = await Promise.all([api.get('/api/models'), api.get('/api/room'), api.get('/api/info'), getMe()]); } catch (e) { toast(tr(e.message), 'err'); }
+  try { [models, tables, info, me] = await Promise.all([api.get('/api/models'), api.get('/api/rooms'), api.get('/api/info'), getMe()]); } catch (e) { toast(tr(e.message), 'err'); }
   if (!nameStore.get() && !me.admin) cfg.name = T('玩家'); // "房主" is the host computer's default name
   const canSearch = true;  // both modes use the endgame search of the Rust core (no PyTorch needed)
   if (models.length) cfg.model = models[0].id;
@@ -264,7 +264,12 @@ async function viewSetup() {
     const nameInput = h('input', { type: 'text', value: cfg.name, maxlength: 10, oninput: (e) => { cfg.name = e.target.value; } });
     const speed = h('input', { type: 'range', min: 0.5, max: 3, step: 0.25, value: cfg.ai_speed, oninput: (e) => { cfg.ai_speed = +e.target.value; spd.textContent = `${cfg.ai_speed}×`; } });
     const spd = h('span', { class: 'dim' }, `${cfg.ai_speed}×`);
-    const warn = room && room.exists && room.status === 'playing' ? h('p', { class: 'dim' }, T('提示：当前已有一桌在进行，开新桌会结束它。')) : null;
+    // several tables can run side by side: a new one never ends the others
+    const open = (tables && tables.rooms) ? tables.rooms.length : 0;
+    const maxRooms = (tables && tables.max) || 8;
+    const warn = open >= maxRooms
+      ? h('p', { class: 'dim' }, T('已经开了 {n} 桌（最多 {m} 桌），请先在首页关掉不用的牌桌。', { n: open, m: maxRooms }))
+      : open > 0 ? h('p', { class: 'dim' }, T('已有 {n} 桌在进行，新开一桌不影响它们（最多同时 {m} 桌）。', { n: open, m: maxRooms })) : null;
     root.replaceChildren(
       h('div', { class: 'nav' }, h('a', { class: 'btn small', href: '#/' }, T('返回')), h('span', { class: 'title' }, T('开一桌')), h('span', { class: 'spacer' })),
       h('div', { class: 'setup' },
