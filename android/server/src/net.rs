@@ -293,3 +293,28 @@ impl Net {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Same values as the numpy inference (python/guandan/npnet.py) for one recorded decision.
+    /// Needs GUANDAN_GDM (an exported model) and GUANDAN_FIXTURE (a directory with fx_s.bin,
+    /// fx_h.bin, fx_a.bin and the numpy values fx_q.bin); skipped without them.
+    #[test]
+    fn matches_numpy_inference() {
+        let (Ok(gdm), Ok(dir)) = (std::env::var("GUANDAN_GDM"), std::env::var("GUANDAN_FIXTURE")) else {
+            return;
+        };
+        let net = Net::load(&std::fs::read(gdm).unwrap()).unwrap();
+        let rd = |n: &str| std::fs::read(format!("{dir}/{n}")).unwrap();
+        let (s, h, a) = (rd("fx_s.bin"), rd("fx_h.bin"), rd("fx_a.bin"));
+        let want: Vec<f32> = rd("fx_q.bin").chunks(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let got = net.score(&net.encode_state(&s, &h), &a);
+        println!("hist_len {} numpy {:?} rust {:?}", net.hist_len, want, got);
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() < 1e-3, "rust {g} vs numpy {w}");
+        }
+    }
+}

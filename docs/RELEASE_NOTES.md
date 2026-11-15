@@ -18,6 +18,14 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.12.0
+
+- **随包模型变强**：AI 现在能记住整局的出牌顺序（最近 96 手，原来只记 24 手，一小局平均 82 手）。在 v1.11 模型上又自对弈 20 亿局面，3 万副从未用过的复式牌上对 v1.11 每局多赢 **0.067 级**，单局胜率 **51.6%**。对照实验证明是“记得更久”本身带来的：同样多练 6 亿局面，只记 24 手的对照组比记 96 手的少赢 0.033 级。
+- 电脑版、免安装版、安卓 App 都已内置；模型大小不变（11 MB）。
+- 训练程序新增几个实验选项（`--hist-len`、`--oracle`、`--arch tf --distill` 等），默认不开，记录见 docs/TRAINING.md。
+
+**English.** The bundled network now reads the last 96 moves of the round instead of 24 (a round has about 82 including passes) and trained on for 2 billion more self-play decisions: +0.067 levels per round against v1.11 on 30,000 unseen duplicate deals (51.6% of rounds). A control run with the old 24-move window and the same extra training was 0.033 levels per round weaker. Same size (11 MB) in all builds.
+
 ### v1.11.2
 
 - “开一桌”页面默认改为**实战模式 + 快速对局**（仍可切回教学模式或竞技模式）。
