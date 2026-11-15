@@ -85,11 +85,13 @@ def build_parser():
     ap.add_argument("--tf-layers", type=int, default=4)
     ap.add_argument("--tf-heads", type=int, default=4)
     ap.add_argument("--distill", default="",
-                    help="teacher checkpoint: a new model first learns the teacher's values of its moves "
-                         "(the teacher plays), then switches to self-play (see --distill-frames)")
-    ap.add_argument("--distill-frames", type=float, default=3e8,
-                    help="samples of distillation before switching to self-play (or create <run>/SWITCH)")
-    ap.add_argument("--distill-k", type=int, default=8,
+                    help="teacher checkpoint (kickstarting): a new model learns from the teacher's values "
+                         "and from its own self-play at the same time, the teacher's share fading out")
+    ap.add_argument("--distill-frames", type=float, default=1e9,
+                    help="self-play samples over which the teacher's share of each batch falls from 1 to 0")
+    ap.add_argument("--teacher-play-frames", type=float, default=1e8,
+                    help="self-play samples over which the teacher's share of the moves played falls from 1 to 0")
+    ap.add_argument("--distill-k", type=int, default=6,
                     help="moves per decision labelled by the teacher: its best half plus random others")
     ap.add_argument("--hist-len", type=int, default=0,
                     help="moves of history the network reads (0 = keep the model's; new models 24)")
@@ -156,7 +158,7 @@ def pool_paths(run_dir, base, extra, keep=8):
     return [p for p in dict.fromkeys(paths) if os.path.exists(p)]
 
 
-def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, shared_oracle=None, phase=None):
+def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, shared_oracle=None, progress=None):
     try:
         set_priority("low")
         torch.set_num_threads(1)
@@ -175,10 +177,10 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
             oracle = GuandanNet(ModelConfig(**shared_oracle.cfg.to_dict())).to(dev)
             oracle.eval()
         teacher = None
-        if args.get("distill") and phase is not None and phase.value == 0:
+        if args.get("distill") and progress is not None and progress.value < args["distill_frames"]:
             tm, _ = load_checkpoint(args["distill"], dev)
             teacher = BatchPolicy(tm, dev)
-        dk = int(args.get("distill_k", 8))
+        dk = int(args.get("distill_k", 6))
         dbuf = []  # distillation rows waiting to be sent
         n_env = args["envs"]
         env = _core.VecEnv(n_env, args["seed"] * 1000 + aid * 7919 + int(time.time()), True)
@@ -246,12 +248,21 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 if oracle is not None:
                     oracle.load_state_dict(shared_oracle.state_dict())
             players, s, h, a, off = unpack_obs(env.observe())
-            if teacher is not None and phase.value == 0:
-                # distillation: the teacher plays; a sample of every decision's moves is labelled
-                # with the teacher's values (its best half and random others, so that the student
-                # also learns which moves are bad)
+            if teacher is not None and progress.value >= args["distill_frames"]:
+                teacher = None  # kickstarting over: plain self-play from here on
+            if teacher is not None:
+                # kickstarting: the student plays (at first mostly the teacher, fading out), every
+                # decision is a normal self-play sample, and the teacher labels a sample of each
+                # decision's moves (its best half and random others, so that the student also
+                # learns which moves are bad); the learner blends both targets
+                fr = progress.value
+                p_teach = max(0.0, 1.0 - fr / max(1.0, args["teacher_play_frames"]))
+                qs = policy.q_values(s, h, a, off)
                 qt = teacher.q_values(s, h, a, off)
-                ch = choose_from_q(qt, off, args["epsilon"], rng, top_k, eps_top)
+                ch = choose_from_q(qs, off, args["epsilon"], rng, top_k, eps_top)
+                if p_teach > 0:
+                    ch_t = choose_from_q(qt, off, args["epsilon"], rng, top_k, eps_top)
+                    ch = np.where(rng.random(n_env) < p_teach, ch_t, ch)
                 x = np.frombuffer(env.observe_hidden(), np.uint8).reshape(n_env, HIDDEN_DIM)
                 n_mv = np.diff(off)
                 ri, ai = [], []
@@ -267,25 +278,22 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 if ri:
                     ri, ai = np.concatenate(ri), np.concatenate(ai)
                     dbuf.append((s[ri], h[ri], a[ai], qt[ai] * 3.0, x[ri]))
-                res = env.step(ch.tolist(), False)
-                rounds += len(res)
-                steps += len(ch)
                 if sum(len(d[3]) for d in dbuf) >= send_size:
                     sb, hb, ab, tb, xb = (np.concatenate(z) for z in zip(*dbuf))
                     dbuf = []
                     item = (aid, np.packbits(sb, axis=1), np.packbits(hb.reshape(len(tb), H_FLAT), axis=1),
-                            np.packbits(ab, axis=1), tb.astype(np.float32), rounds, steps,
-                            np.packbits(xb, axis=1), None)
+                            np.packbits(ab, axis=1), tb.astype(np.float32), 0, 0, np.packbits(xb, axis=1), None, 1)
                     while not stop.is_set():
                         try:
                             q.put(item, timeout=1.0)
                             break
                         except queue_mod.Full:
                             continue
-                    rounds = 0
-                    steps = 0
-                continue
-            if any(opp):
+                if use_td:
+                    res = env.step_q(ch.tolist(), (qs[off[:-1] + ch] * 3.0).tolist())
+                else:
+                    res = env.step(ch.tolist(), True)
+            elif any(opp):
                 old = np.asarray([o is not None for o in opp]) & ((players % 2) != learn_team)
                 ch = np.zeros(n_env, np.int64)
                 rows = np.nonzero(~old)[0]
@@ -323,7 +331,7 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 r = np.frombuffer(env.take_returns(), np.float32).copy()
                 while not stop.is_set():
                     try:
-                        q.put((aid, s_p, h_p, a_p, t, rounds, steps, x_p, r), timeout=1.0)
+                        q.put((aid, s_p, h_p, a_p, t, rounds, steps, x_p, r, 0), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -399,7 +407,7 @@ def search_actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict
                 S, H, A, T = [], [], [], []
                 while not stop.is_set():
                     try:
-                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps, None, None), timeout=1.0)
+                        q.put((-1 - aid, s_p, h_p, a_p, t, rounds, steps, None, None, 0), timeout=1.0)
                         break
                     except queue_mod.Full:
                         continue
@@ -692,7 +700,7 @@ def run(args):
         shared_oracle.share_memory()
         oracle_scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     version = ctx.Value("i", 0)
-    phase = ctx.Value("i", 0 if (args.distill and frames < args.distill_frames) else 1)  # 0 = distillation
+    progress = ctx.Value("d", float(frames))  # self-play samples so far (kickstarting schedule)
     q = ctx.Queue(maxsize=max(4, args.actors * 3))
     stop = ctx.Event()
     adict = dict(envs=args.envs, epsilon=args.epsilon, actor_device=args.actor_device, seed=args.seed,
@@ -701,12 +709,13 @@ def run(args):
                  pool=[p for p in args.pool.split(";") if p.strip()],
                  search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp,
                  td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus,
-                 distill=args.distill, distill_k=args.distill_k)
+                 distill=args.distill, distill_k=args.distill_k, distill_frames=args.distill_frames,
+                 teacher_play_frames=args.teacher_play_frames)
     if args.distill:
         adict["base"] = args.distill  # the evaluator measures the student against its teacher
     procs = []
     for i in range(args.actors):
-        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict, shared_oracle, phase),
+        p = ctx.Process(target=actor_main, args=(i, cfg.to_dict(), shared, version, q, stop, adict, shared_oracle, progress),
                         daemon=True)
         p.start()
         procs.append(p)
@@ -731,6 +740,9 @@ def run(args):
         set_priority("high")
     buf = Replay(args.buffer, device, hidden=args.aux > 0 or args.oracle)
     sbuf = Replay(max(20_000, args.buffer // 2), device) if args.search_actors else None
+    # kickstarting: the teacher's labels (args.distill_k rows per decision)
+    dbuf = Replay(args.buffer, device, hidden=args.aux > 0) if args.distill else None
+    d_received = d_trained = 0
     s_received = 0
     busy = 0.0
     received = 0
@@ -780,8 +792,13 @@ def run(args):
                         item = q.get_nowait()
                 except queue_mod.Empty:
                     break
-                src, s_p, h_p, a_p, t, r_cnt, st_cnt, x_p, r_out = item
+                src, s_p, h_p, a_p, t, r_cnt, st_cnt, x_p, r_out, kind = item
                 t = t / 3.0
+                if kind == 1 and dbuf is not None:  # teacher labels
+                    dbuf.add(s_p, h_p, a_p, t, x_p)
+                    d_received += len(t)
+                    got += 1
+                    continue
                 if r_out is not None:
                     r_out = r_out / 3.0
                 if src < 0 and sbuf is not None:  # search labels
@@ -797,18 +814,29 @@ def run(args):
                 got += 1
                 if got >= args.actors * 2:
                     break
-            # ---- distillation done: switch to self-play
-            switch_file = os.path.join(run_dir, "SWITCH")
-            if phase.value == 0 and (frames >= args.distill_frames or os.path.exists(switch_file)):
-                phase.value = 1
-                buf.pos = buf.size = 0  # the teacher's labels are not self-play returns
-                log_line(metrics, {"type": "phase", "t": time.time(), "frames": frames, "to": "selfplay"})
-                print(f"distillation finished at {frames:,} samples: switching to self-play", flush=True)
+            progress.value = float(frames)
             # ---- train
             budget = 0
             tb = time.time()
-            while buf.size >= args.batch * 4 and trained < received * args.reuse and budget < 50:
-                if sbuf is not None and sbuf.size >= 4096:
+            w_teacher = max(0.0, 1.0 - frames / args.distill_frames) if dbuf is not None else 0.0
+            nd = int(args.batch * w_teacher) if (dbuf is not None and dbuf.size >= args.batch * 4) else 0
+            nd = min(nd, args.batch)
+
+            def have_budget():
+                # each source of samples is trained on about `reuse` times
+                if nd < args.batch:
+                    return trained < received * args.reuse
+                return d_trained < d_received * args.reuse
+
+            while buf.size >= args.batch * 4 and have_budget() and budget < 50:
+                if nd >= args.batch:
+                    st, ht, at, tt, xt = dbuf.sample(args.batch)
+                elif nd > 0:
+                    st, ht, at, tt, xt = buf.sample(args.batch - nd)
+                    s2, h2, a2, t2, x2 = dbuf.sample(nd)
+                    st, ht, at, tt = torch.cat([st, s2]), torch.cat([ht, h2]), torch.cat([at, a2]), torch.cat([tt, t2])
+                    xt = torch.cat([xt, x2]) if (xt is not None and x2 is not None) else None
+                elif sbuf is not None and sbuf.size >= 4096:
                     ns = int(args.batch * args.search_share)
                     st, ht, at, tt, xt = buf.sample(args.batch - ns)
                     s2, h2, a2, t2, _ = sbuf.sample(ns)
@@ -858,7 +886,8 @@ def run(args):
                     torch.nn.utils.clip_grad_norm_(model.parameters(), 40.0)
                     scaler.step(opt)
                     scaler.update()
-                trained += args.batch
+                trained += args.batch - nd  # self-play samples used
+                d_trained += nd  # teacher labels used
                 budget += 1
                 n_updates += 1
                 loss_acc += float(loss.detach())
@@ -886,6 +915,8 @@ def run(args):
                        "buffer": buf.size, "train_seconds": train_seconds,
                        "learner_busy": busy / dt,
                        "search_labels": s_received,
+                       "teacher_share": w_teacher if dbuf is not None else None,
+                       "teacher_labels": d_received if dbuf is not None else None,
                        "aux_loss": aux_acc / max(1, loss_n) if args.aux > 0 else None,
                        "ntp_loss": ntp_acc / max(1, loss_n) if args.ntp > 0 else None,
                        "oracle_loss": oracle_acc / max(1, loss_n) if oracle is not None else None,
