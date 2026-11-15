@@ -89,6 +89,8 @@ def build_parser():
                          "and from its own self-play at the same time, the teacher's share fading out")
     ap.add_argument("--distill-frames", type=float, default=1e9,
                     help="self-play samples over which the teacher's share of each batch falls from 1 to 0")
+    ap.add_argument("--teacher-share", type=float, default=0.5,
+                    help="share of each batch taken from the teacher's labels at the start (falls to 0)")
     ap.add_argument("--teacher-play-frames", type=float, default=1e8,
                     help="self-play samples over which the teacher's share of the moves played falls from 1 to 0")
     ap.add_argument("--distill-k", type=int, default=4,
@@ -259,7 +261,7 @@ def actor_main(aid, cfg: dict, shared_model, version, q, stop, args: dict, share
                 p_teach = max(0.0, 1.0 - fr / max(1.0, args["teacher_play_frames"]))
                 # label only part of the decisions: the learner has to digest every label, and a
                 # few labelled moves per decision are plenty; fewer as the teacher's share falls
-                p_label = 0.5 * max(0.0, 1.0 - fr / args["distill_frames"]) + 0.02
+                p_label = args["teacher_share"] * max(0.0, 1.0 - fr / args["distill_frames"]) + 0.02
                 qs = policy.q_values(s, h, a, off)
                 qt = teacher.q_values(s, h, a, off)
                 ch = choose_from_q(qs, off, args["epsilon"], rng, top_k, eps_top)
@@ -713,7 +715,7 @@ def run(args):
                  search_envs=args.search_envs, search_cfg=args.search_cfg, aux=args.aux, ntp=args.ntp,
                  td_lambda=args.td_lambda, epsilon_top=args.epsilon_top, top_k=args.top_k, actor_gpus=actor_gpus,
                  distill=args.distill, distill_k=args.distill_k, distill_frames=args.distill_frames,
-                 teacher_play_frames=args.teacher_play_frames)
+                 teacher_play_frames=args.teacher_play_frames, teacher_share=args.teacher_share)
     if args.distill:
         adict["base"] = args.distill  # the evaluator measures the student against its teacher
     procs = []
@@ -821,7 +823,7 @@ def run(args):
             # ---- train
             budget = 0
             tb = time.time()
-            w_teacher = max(0.0, 1.0 - frames / args.distill_frames) if dbuf is not None else 0.0
+            w_teacher = (args.teacher_share * max(0.0, 1.0 - frames / args.distill_frames)) if dbuf is not None else 0.0
             nd = int(args.batch * w_teacher) if (dbuf is not None and dbuf.size >= args.batch * 4) else 0
             nd = min(nd, args.batch)
 
