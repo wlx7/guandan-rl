@@ -53,3 +53,32 @@ def test_load_pt_reads_config_and_meta():
     obj = load_pt(MODEL)
     assert obj["config"]["preset"]
     assert "lstm.weight_ih_l0" in obj["state_dict"]
+
+
+def test_fastnet_matches_torch_and_numpy():
+    torch = pytest.importorskip("torch")
+    from guandan.agents import build_fastnet
+    from guandan.model import load_checkpoint, STATE_DIM, HIST_LEN, HIST_DIM, ACTION_DIM
+    tm, _ = load_checkpoint(MODEL)
+    nm, _ = load_numpy_model(MODEL)
+    fn_t = build_fastnet(tm)
+    fn_n = build_fastnet(nm)
+    assert fn_t is not None and fn_n is not None
+    g = _core.Game(42)
+    for step in range(30):
+        if g.phase not in (0, 1):
+            break
+        mvs_t, q_ft, lg_ft = fn_t.evaluate_game(g, True)
+        mvs_n, q_fn, lg_fn = fn_n.evaluate_game(g, True)
+        assert np.allclose(q_ft, q_fn, atol=1e-6)
+        assert np.allclose(lg_ft, lg_fn, atol=1e-6)
+        if step in (0, 10, 22):
+            s, h, a, n = g.encode()
+            st = torch.frombuffer(bytearray(s), dtype=torch.uint8).view(1, STATE_DIM).float()
+            ht = torch.frombuffer(bytearray(h), dtype=torch.uint8).view(1, HIST_LEN, HIST_DIM).float()
+            at = torch.frombuffer(bytearray(a), dtype=torch.uint8).view(n, ACTION_DIM).float()
+            with torch.no_grad():
+                z = tm.encode_state(st, ht)
+                q_ref = tm.score(z.expand(n, -1), at).numpy()
+            assert float(np.max(np.abs(np.asarray(q_ft) - q_ref))) < 1e-4
+        g.apply(*mvs_t[int(np.argmax(q_ft))])

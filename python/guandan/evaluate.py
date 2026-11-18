@@ -106,10 +106,11 @@ def make_player(spec, device="cpu", search="", endgame="", oracle_search=""):
         return OracleSearchPlayer(m, OracleSearch(m, o, device, top_k=k, worlds=w, beta=beta), device, eg)
     if endgame:
         from .endgame import EndgameSearch
-        if endgame == "fast":
-            es = EndgameSearch(m, device, cards=26, worlds=24, guided=0.02, max_nodes=250_000, prior=0.25, max_cands=12, q_gap=1.2)
-        elif endgame == "deep":
-            es = EndgameSearch(m, device, cards=30, worlds=32, guided=0.02, max_nodes=250_000, prior=0.25, max_cands=12, q_gap=1.0)
+        from .agents import ENDGAME_FAST, ENDGAME_DEEP
+        if endgame in ("fast", "deep"):
+            cfg = dict(ENDGAME_DEEP if endgame == "deep" else ENDGAME_FAST)
+            cfg["guided"] = cfg.pop("floor")
+            es = EndgameSearch(m, device, **cfg)
         else:
             parts = endgame.split(",")
             guided = float(parts[2]) if len(parts) > 2 else 0.02

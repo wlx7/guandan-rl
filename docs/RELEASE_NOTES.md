@@ -18,6 +18,21 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.14.0
+
+- **无需重头训练网络，在线多阶段推理引擎再破平台期**：在同一份 211 亿样本随包模型（`guandan-medium.pt`，11 MB）上，新增纯 Rust 零依赖增量推理与反事实信念重采样引擎（`src/fastnet.rs`），在 **v1.13.0 之上再次大幅提升棋力**：
+  - **纯 Rust 增量 LSTM 中盘与还贡推演搜索 + 残局求解器收尾**：利用二值特征稀疏加法、ReLU 稀疏激活跳过与运行时 AVX2+FMA / NEON 指令加速，在根节点只算一次四家历史前缀，推演中按座次懒更新 `T=1` 单步 LSTM（跳过约 40% 被迫唯一出牌，已出完玩家零开销），并在剩 18 张牌时直接切换精确 Alpha-Beta 求解收尾。CPU 推演比免安装版 NumPy 快 **50 倍**（单次触发仅约 240 毫秒，仅在约 8.6% 前两名估值差 ≤ 0.08 级的胶着步触发，整局平均每步仅多约 20 毫秒），使**中盘与还贡全回合信念推演首次在电脑版、Windows 免安装版和安卓 App 上全部默认实时开启**。
+  - **根缓存 SMC 历史动作似然重采样**：利用公开出牌历史在所有抽样世界严格不变的性质，在根节点一次性预计算历史 LSTM 与公共状态特征，并行评估各抽样世界中其余三家最近 6 步真实出牌/不出的策略似然并系统重采样（`2×24 → 24` 世界），自动筛除“有大牌或炸弹却反常不出/拆牌”的失真手牌组合。
+  - **同点数跨花色炸弹保留相关性校准**（`bomb_gamma = 0.25`）：修正玩家实战不轻易拆四张炸弹带来的跨花色正相关性，560 个真实残局局面隐藏 4+ 张炸弹召回率从 59.9% 提升至 **67.1%**（准确率保持 78.0%）。
+- **独立未见牌局最终验收**：
+  - 直接对打刚发布的 **v1.13.0 默认 AI**：2,000 副未见复式牌（4,000 局，`--seed 20262001`）每局再多赢 **+0.087 ± 0.015 级**（6.0 倍标准误，单局胜率 **51.15% ± 0.36%**）；300 场带进还贡打过 A 的完整竞技赛赢 **158 场（52.67% ± 2.35%）**；
+  - 对不搜索的随包纯网络（v1.12.0）：2,000 副未见复式牌（`--seed 20262003`）每局多赢 **+0.190 ± 0.015 级**（12.6 倍标准误，单局胜率 **51.82% ± 0.35%**，增益超过 100 亿样本双 4090 自对弈训练）；
+  - 直接对打 **v1.12.1 默认 AI**：2,000 副未见复式牌（`--seed 20262004`）每局多赢 **+0.135 ± 0.015 级**（9.1 倍标准误，单局胜率 **51.40% ± 0.36%**）。
+- 同时完成并记录了近优动作软采样（负向 −0.035 级/局）与 1.25 万多世界精确/推演状态热启动蒸馏及 2048 维残差头探针实验（证明固定深度单步网络已触及贝叶斯泛化下界），详见 docs/MODEL.md 与 docs/TRAINING.md。
+- 电脑版、Windows 免安装版（单步推理同步提速 3.2 倍）、安卓 App 同步升级；随包模型体积不变（11 MB）。
+
+**English.** A second major jump on top of v1.13.0—without retraining the 21.1B-sample bundled network—powered by a new dependency-free pure-Rust inference & incremental-LSTM engine (`src/fastnet.rs`): (1) **online mid-game & tribute-return belief rollout with exact 18-card minimax leaf cutoffs**, using binary-input sparse accumulation, ReLU-sparse hidden layers, runtime AVX2+FMA, and lazy per-seat `T=1` LSTM updates (~50× faster than portable NumPy rollouts: ~240 ms when triggered on the ~8.6% close decisions within 0.08 levels, ~20 ms/turn average), now live by default across Python, portable `.exe`, and Android; (2) **root-cached SMC action-likelihood world resampling** (`2×24 → 24` worlds, scoring the other seats' last 6 plays while precomputing public history LSTM states once at the root); (3) **cross-suit same-rank bomb correlation** (`bomb_gamma = 0.25`, lifting hidden 4+ bomb recall from 59.9% to 67.1%). On untouched holdout deals, v1.14.0 beats **v1.13.0** by **+0.087 ± 0.015** levels/round (51.15% round wins; 158 / 300 = 52.7% full tribute matches), beats **v1.12.1** by **+0.135 ± 0.015** levels/round, and gains **+0.190 ± 0.015** levels/round (51.82% round wins) over the raw v1.12.0 network.
+
 ### v1.13.0
 
 - **突破训练平台期，实战棋力显著增强**：在同一个 211 亿样本随包模型上，全面重构了手牌信念抽样与残局精确搜索引擎：

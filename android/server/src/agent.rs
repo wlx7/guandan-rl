@@ -1,9 +1,11 @@
 //! The AI player: scores every legal move with the network and switches to the exact endgame
 //! search near the end of a round (python/guandan/agents.py, GameAgent).
 
-use guandan_core::endgame::{endgame_choose_ext, EndgameCfg};
+use guandan_core::cards::hand_count;
+use guandan_core::endgame::{endgame_choose_full, EndgameCfg};
+use guandan_core::fastnet::RolloutCfg;
 use guandan_core::features::{encode_action, encode_history, encode_state, ACTION_DIM, HIST_DIM, HIST_LEN, STATE_DIM};
-use guandan_core::game::Game;
+use guandan_core::game::{Game, Phase};
 use guandan_core::moves::{Kind, Move};
 
 use crate::net::Net;
@@ -48,9 +50,10 @@ pub fn choose_net(net: &Net, g: &Game) -> Move {
     evaluate(net, g).into_iter().next().map(|x| x.0).unwrap_or_else(Move::pass)
 }
 
-/// The network's move; near the end of a round the exact endgame search (worlds sampled from
-/// the calibrated belief posterior, top candidate moves solved and blended with Q) replaces it
-/// when it finds a stronger move.
+/// The network's move, upgraded by:
+/// 1. Exact endgame search (`<= 26` / `30` cards) over calibrated + bomb-clustered + SMC worlds.
+/// 2. Pure-Rust incremental-LSTM rollout search (+ 18-card exact leaf solver) on close mid-game
+///    and tribute-return decisions.
 pub fn choose(net: &Net, g: &Game, deep: bool) -> Move {
     let (moves, q, z) = scores(net, g);
     if moves.is_empty() {
@@ -61,8 +64,35 @@ pub fn choose(net: &Net, g: &Game, deep: bool) -> Move {
     if moves.len() > 1 {
         let logits = net.belief_logits(&z);
         let q_levels: Vec<f32> = q.iter().map(|&v| v * 3.0).collect();
-        if let Some(i) = endgame_choose_ext(g, best, &cfg, None, logits.as_deref(), Some(&q_levels), rand::random::<u64>()) {
-            return moves[i].clone();
+        let cl: u32 = g.hands.iter().map(hand_count).sum();
+        if g.phase == Phase::Play && cl <= cfg.cards {
+            let smc = Some((&net.fast, 2usize, 6usize));
+            if let Some(i) = endgame_choose_full(g, best, &cfg, None, logits.as_deref(), Some(&q_levels), 0.25, smc, rand::random::<u64>()) {
+                return moves[i].clone();
+            }
+        } else {
+            let ro_cfg = RolloutCfg {
+                min_cards: cfg.cards + 1,
+                max_cards: 56,
+                worlds: if deep { 16 } else { 12 },
+                top_k: if deep { 4 } else { 3 },
+                close_gap: if deep { 0.10 } else { 0.08 },
+                max_cand_gap: 0.45,
+                prior: 0.35,
+                margin_se: 0.75,
+                floor: cfg.floor,
+                bomb_gamma: 0.25,
+                solver_leaf_cards: 18,
+                search_return: true,
+                return_gap: if deep { 0.25 } else { 0.20 },
+                return_top_k: 4,
+                smc_oversample: 1,
+                smc_last_k: 6,
+                threads: cfg.threads,
+            };
+            if let Some(i) = net.fast.rollout_choose(g, best, &q_levels, logits.as_deref(), &ro_cfg, rand::random::<u64>()) {
+                return moves[i].clone();
+            }
         }
     }
     moves[best].clone()

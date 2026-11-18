@@ -21,7 +21,7 @@ impl Game {
     /// belief head). `floor` keeps every player possible so that a wrong guess is never
     /// ruled out completely. Card counts and known tribute constraints are respected exactly.
     pub fn determinize_weighted(&self, me: u8, expect: &[[f32; 54]; 3], floor: f32, rng: &mut Rng) -> Game {
-        self.determinize_guided(me, Some(expect), None, floor, rng)
+        self.determinize_guided(me, Some(expect), None, floor, 0.0, rng)
     }
 
     /// Sample hidden hands from the network's 324 belief logits (`3 x 54 x 2`: `P(count >= 1)`
@@ -30,7 +30,14 @@ impl Game {
     /// correlations and hard tribute / anti-tribute deductions.
     pub fn determinize_belief(&self, me: u8, logits: &[f32], floor: f32, rng: &mut Rng) -> Game {
         debug_assert_eq!(logits.len(), HIDDEN_DIM);
-        self.determinize_guided(me, None, Some(logits), floor, rng)
+        self.determinize_guided(me, None, Some(logits), floor, 0.0, rng)
+    }
+
+    /// Like `determinize_belief`, plus optional cross-suit same-rank bomb retention correlation
+    /// (`bomb_gamma`, e.g. `0.25`; `0.0` disables cross-suit clustering).
+    pub fn determinize_belief_clustered(&self, me: u8, logits: &[f32], floor: f32, bomb_gamma: f32, rng: &mut Rng) -> Game {
+        debug_assert_eq!(logits.len(), HIDDEN_DIM);
+        self.determinize_guided(me, None, Some(logits), floor, bomb_gamma, rng)
     }
 
     fn tribute_forbidden(&self, me: u8) -> [[bool; 54]; 3] {
@@ -79,7 +86,7 @@ impl Game {
     }
 
     fn determinize_with(&self, me: u8, expect: Option<&[[f32; 54]; 3]>, floor: f32, rng: &mut Rng) -> Game {
-        self.determinize_guided(me, expect, None, floor, rng)
+        self.determinize_guided(me, expect, None, floor, 0.0, rng)
     }
 
     fn determinize_guided(
@@ -88,6 +95,7 @@ impl Game {
         expect: Option<&[[f32; 54]; 3]>,
         logits: Option<&[f32]>,
         floor: f32,
+        bomb_gamma: f32,
         rng: &mut Rng,
     ) -> Game {
         let mut g = self.clone();
@@ -271,6 +279,21 @@ impl Game {
         }
 
         // 4. Order unseen card types by highest concentration first (with small random tie-break)
+        let wt = wild_type(self.level) as usize;
+        let bg = bomb_gamma.max(0.0) as f64;
+        let mut rk_exp = [[0f64; 13]; 3];
+        if bg > 0.0 {
+            for rk in 0..13usize {
+                for s in 0..4usize {
+                    let t = 4 * rk + s;
+                    if t != wt {
+                        for r in 0..3 {
+                            rk_exp[r][rk] += e[r][t];
+                        }
+                    }
+                }
+            }
+        }
         let mut rem_e = [0f64; 3];
         for r in 0..3 {
             rem_e[r] = e[r].iter().sum();
@@ -278,14 +301,26 @@ impl Game {
         let mut order: [(f64, u8); 54] = [(0.0, 0); 54];
         let mut n_ord = 0usize;
         for t in 0..54u8 {
-            let pc = pool[t as usize];
+            let tu = t as usize;
+            let pc = pool[tu];
             if pc == 0 {
                 continue;
             }
             let pcf = pc as f64;
-            let mx = (e[0][t as usize] / pcf)
-                .max(e[1][t as usize] / pcf)
-                .max(e[2][t as usize] / pcf);
+            let mut mx = (e[0][tu] / pcf).max(e[1][tu] / pcf).max(e[2][tu] / pcf);
+            if bg > 0.0 && tu < 52 && tu != wt {
+                let rk = tu >> 2;
+                let unseen_rk: u8 = (0..4)
+                    .map(|s| {
+                        let c = 4 * rk + s;
+                        if c == wt { 0 } else { pool[c] }
+                    })
+                    .sum();
+                if unseen_rk >= 4 {
+                    let r_mx = rk_exp[0][rk].max(rk_exp[1][rk]).max(rk_exp[2][rk]);
+                    mx = mx.max(r_mx / (unseen_rk as f64).max(4.0));
+                }
+            }
             order[n_ord] = (mx + rng.uniform() * 0.02, t);
             n_ord += 1;
         }
@@ -333,20 +368,42 @@ impl Game {
             let t = t_u8 as usize;
             let pc = pool[t];
             let mut cap_adj = [0f64; 3];
+            let mut boost = [1.0f64; 3];
+            let is_nat_rk = bg > 0.0 && t < 52 && t != wt;
+            let rk = t >> 2;
             for r in 0..3 {
                 let q = q_of[r] as usize;
                 if left[q] > 0 && new_hands[q][t] < 2 {
                     cap_adj[r] = left[q] as f64 / rem_e[r].max(0.05);
+                    if is_nat_rk && rk_exp[r][rk] >= 1.6 {
+                        let got_rk: u8 = (0..4)
+                            .map(|s| {
+                                let c = 4 * rk + s;
+                                if c == wt { 0 } else { new_hands[q][c] }
+                            })
+                            .sum();
+                        if got_rk >= 2 {
+                            boost[r] = 1.0 + bg * ((got_rk - 1) as f64);
+                        }
+                    }
                 }
             }
             if pc == 1 {
-                let w = [e[0][t] * cap_adj[0], e[1][t] * cap_adj[1], e[2][t] * cap_adj[2]];
+                let w = [
+                    e[0][t] * cap_adj[0] * boost[0],
+                    e[1][t] * cap_adj[1] * boost[1],
+                    e[2][t] * cap_adj[2] * boost[2],
+                ];
                 let r1 = pick_r(&w, &left, t, &new_hands, rng);
                 let q1 = q_of[r1] as usize;
                 new_hands[q1][t] += 1;
                 left[q1] = left[q1].saturating_sub(1);
             } else {
-                let w1 = [0.5 * e[0][t] * cap_adj[0], 0.5 * e[1][t] * cap_adj[1], 0.5 * e[2][t] * cap_adj[2]];
+                let w1 = [
+                    0.5 * e[0][t] * cap_adj[0] * boost[0],
+                    0.5 * e[1][t] * cap_adj[1] * boost[1],
+                    0.5 * e[2][t] * cap_adj[2] * boost[2],
+                ];
                 let r1 = pick_r(&w1, &left, t, &new_hands, rng);
                 let q1 = q_of[r1] as usize;
                 new_hands[q1][t] += 1;
@@ -356,7 +413,19 @@ impl Game {
                 let mut p_same = 0.0;
                 if left[q1] > 0 && new_hands[q1][t] < 2 {
                     let rem_after = (rem_e[r1] - 0.5 * e[r1][t]).max(0.05);
-                    p_same = (rho[r1][t] * (left[q1] as f64 / rem_after)).min(0.98);
+                    let mut b2 = 1.0f64;
+                    if is_nat_rk && rk_exp[r1][rk] >= 1.6 {
+                        let got_rk: u8 = (0..4)
+                            .map(|s| {
+                                let c = 4 * rk + s;
+                                if c == wt { 0 } else { new_hands[q1][c] }
+                            })
+                            .sum();
+                        if got_rk >= 2 {
+                            b2 = 1.0 + 0.5 * bg * ((got_rk - 1) as f64);
+                        }
+                    }
+                    p_same = (rho[r1][t] * (left[q1] as f64 / rem_after) * b2).min(0.98);
                 }
                 let mut other_sum = 0.0;
                 let mut other_cnt = 0usize;

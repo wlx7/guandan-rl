@@ -100,6 +100,7 @@ pub struct Net {
     head: Vec<Lin>,      // ReLU after every layer but the last
     belief: Option<Lin>, // prediction of the other hands (used by the endgame search), if exported
     hist_len: usize,     // most recent history steps the LSTM reads (model config, default 24)
+    pub fast: guandan_core::fastnet::FastNet,
     pub config: String,
 }
 
@@ -191,20 +192,33 @@ impl Net {
             (Some((ws, w)), Some((_, b))) if ws.len() == 2 && ws[1] == z_dim => Some(Lin::new(w.clone(), b.clone(), ws[0], ws[1])),
             _ => None,
         };
+        let hist_len = meta
+            .get("config")
+            .and_then(|c| c.as_str())
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
+            .and_then(|c| c.get("hist_len").and_then(|v| v.as_u64()))
+            .map_or(24, |n| (n as usize).clamp(1, HIST_LEN));
+        let b_lstm: Vec<f32> = bih.iter().zip(bhh).map(|(a, b)| a + b).collect();
+        let fast = guandan_core::fastnet::FastNet::new(
+            l,
+            hist_len,
+            wih.clone(),
+            whh.clone(),
+            b_lstm.clone(),
+            state_mlp.iter().map(|x| (x.w.clone(), x.b.clone(), x.n_out, x.n_in)).collect(),
+            head.iter().map(|x| (x.w.clone(), x.b.clone(), x.n_out, x.n_in)).collect(),
+            belief.as_ref().map(|x| (x.w.clone(), x.b.clone(), x.n_out, x.n_in)),
+        )?;
         Ok(Net {
             l,
             w_ih: Lin::new(wih.clone(), vec![0.0; 4 * l], 4 * l, HIST_DIM),
             w_hh: Lin::new(whh.clone(), vec![0.0; 4 * l], 4 * l, l),
-            b_lstm: bih.iter().zip(bhh).map(|(a, b)| a + b).collect(),
+            b_lstm,
             state_mlp,
             head,
             belief,
-            hist_len: meta
-                .get("config")
-                .and_then(|c| c.as_str())
-                .and_then(|c| serde_json::from_str::<serde_json::Value>(c).ok())
-                .and_then(|c| c.get("hist_len").and_then(|v| v.as_u64()))
-                .map_or(24, |n| (n as usize).clamp(1, HIST_LEN)),
+            hist_len,
+            fast,
             config: meta.get("config").and_then(|c| c.as_str()).unwrap_or("{}").to_string(),
         })
     }

@@ -1185,6 +1185,22 @@ impl Solver {
         best
     }
 
+    /// Exact minimax value (in levels, for the team of `g.current`) of leaf position `g`,
+    /// or `None` when `max_nodes` was exceeded.
+    pub fn leaf_value(&mut self, g: &Game, max_nodes: u64) -> Option<f32> {
+        let sf = EState::compute_sf_mask(g);
+        let root = EState::from_game_with_sf(g, &sf);
+        let me_team = team(root.current);
+        let (min_b, max_b) = root.tight_bounds();
+        self.reset_for_world(sf, max_nodes);
+        let v = self.value_depth(root, min_b, max_b, 0);
+        if self.aborted {
+            None
+        } else {
+            Some(if me_team == 0 { v as f32 } else { -(v as f32) })
+        }
+    }
+
     fn solve_world(&mut self, g: &Game, moves: &[EMove], order: &[usize], max_nodes: u64) -> Option<Vec<f32>> {
         let sf = EState::compute_sf_mask(g);
         let root = EState::from_game_with_sf(g, &sf);
@@ -1284,6 +1300,23 @@ pub fn endgame_choose_ext(
     q_levels: Option<&[f32]>,
     seed: u64,
 ) -> Option<usize> {
+    endgame_choose_full(g, net_choice, cfg, expect, belief_logits, q_levels, 0.0, None, seed)
+}
+
+/// Full endgame search supporting optional cross-suit bomb correlation (`bomb_gamma`) and
+/// root-cached SMC action-likelihood filtering (`smc = Some((fastnet, oversample, last_k))`).
+#[allow(clippy::too_many_arguments)]
+pub fn endgame_choose_full(
+    g: &Game,
+    net_choice: usize,
+    cfg: &EndgameCfg,
+    expect: Option<&[[f32; 54]; 3]>,
+    belief_logits: Option<&[f32]>,
+    q_levels: Option<&[f32]>,
+    bomb_gamma: f32,
+    smc: Option<(&crate::fastnet::FastNet, usize, usize)>,
+    seed: u64,
+) -> Option<usize> {
     if g.phase != Phase::Play {
         return None;
     }
@@ -1341,10 +1374,12 @@ pub fn endgame_choose_ext(
     let emoves: Vec<EMove> = moves.iter().map(EMove::from_move).collect();
     let me = g.current;
     let mut rng = Rng::new(seed);
-    let worlds: Vec<Game> = (0..cfg.worlds)
+    let oversample = smc.map_or(1, |(_, ov, _)| ov.max(1));
+    let n_draw = cfg.worlds * oversample;
+    let raw_worlds: Vec<Game> = (0..n_draw)
         .map(|_| {
             if let Some(lg) = belief_logits {
-                g.determinize_belief(me, lg, cfg.floor, &mut rng)
+                g.determinize_belief_clustered(me, lg, cfg.floor, bomb_gamma, &mut rng)
             } else if let Some(e) = expect {
                 g.determinize_weighted(me, e, cfg.floor, &mut rng)
             } else {
@@ -1352,6 +1387,16 @@ pub fn endgame_choose_ext(
             }
         })
         .collect();
+    let worlds: Vec<Game> = if let Some((fnet, ov, last_k)) = smc {
+        if ov > 1 && last_k > 0 && !g.history.is_empty() {
+            let logw = fnet.smc_log_weights(g, &raw_worlds, me, last_k, 0.40, 0.04, cfg.threads);
+            crate::fastnet::FastNet::systematic_resample(&raw_worlds, &logw, cfg.worlds, &mut rng)
+        } else {
+            raw_worlds
+        }
+    } else {
+        raw_worlds
+    };
 
     let threads = cfg.threads.max(1).min(worlds.len());
     let chunk = worlds.len().div_ceil(threads);

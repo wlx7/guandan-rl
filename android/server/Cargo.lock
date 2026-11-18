@@ -222,11 +222,11 @@ dependencies = [
 
 [[package]]
 name = "guandan_core"
-version = "1.13.0"
+version = "1.14.0"
 
 [[package]]
 name = "guandan_server"
-version = "1.13.0"
+version = "1.14.0"
 dependencies = [
  "axum",
  "base64",

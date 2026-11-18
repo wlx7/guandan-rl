@@ -2,7 +2,9 @@
 (for the battle server)."""
 from __future__ import annotations
 
+import os
 import random
+import re
 import warnings
 
 import numpy as np
@@ -100,18 +102,126 @@ def choose_from_q(q, off, epsilon=0.0, rng: np.random.Generator | None = None, t
     return ch
 
 
-# exact endgame search when playing (see endgame.rs / endgame.py): once at most `cards` cards
-# are left, `worlds` deals of the hidden cards are sampled from the calibrated belief posterior
-# (full 324 logits + Sinkhorn IPF + 2-copy Bayes + tribute deductions) and top candidate moves
-# within `q_gap` levels are solved exactly and blended with `prior * q_net`
-ENDGAME_FAST = {"cards": 26, "worlds": 24, "floor": 0.02, "max_nodes": 250_000, "prior": 0.25, "max_cands": 12, "q_gap": 1.2}
-ENDGAME_DEEP = {"cards": 30, "worlds": 32, "floor": 0.02, "max_nodes": 250_000, "prior": 0.25, "max_cands": 12, "q_gap": 1.0}
+# Hybrid belief-calibrated search settings (v1.14+):
+# 1. Mid-game & Phase::Return close-decision rollout search via pure-Rust FastNet
+#    (incremental T=1 per-seat LSTM + exact Solver leaf cutoff at `solver_leaf_cards`).
+# 2. Endgame search (`cards_left <= cards`): full 324 belief logits + Sinkhorn IPF + 2-copy Bayes +
+#    cross-suit bomb correlation (`bomb_gamma`) + root-cached SMC action-likelihood filtering
+#    (`smc_oversample x worlds`, last `smc_last_k` plays) + exact alpha-beta minimax blended with Q.
+ENDGAME_FAST = {
+    "cards": 26,
+    "worlds": 24,
+    "floor": 0.02,
+    "bomb_gamma": 0.25,
+    "max_nodes": 250_000,
+    "prior": 0.25,
+    "max_cands": 12,
+    "q_gap": 1.2,
+    "smc_oversample": 2,
+    "smc_last_k": 6,
+    "mid_rollout": True,
+    "mid_worlds": 16,
+    "mid_top_k": 3,
+    "mid_close_gap": 0.08,
+    "mid_prior": 0.35,
+    "mid_margin_se": 0.75,
+    "solver_leaf_cards": 18,
+    "search_return": True,
+    "return_gap": 0.20,
+}
+ENDGAME_DEEP = {
+    "cards": 30,
+    "worlds": 32,
+    "floor": 0.02,
+    "bomb_gamma": 0.25,
+    "max_nodes": 250_000,
+    "prior": 0.25,
+    "max_cands": 12,
+    "q_gap": 1.0,
+    "smc_oversample": 2,
+    "smc_last_k": 6,
+    "mid_rollout": True,
+    "mid_worlds": 20,
+    "mid_top_k": 4,
+    "mid_close_gap": 0.10,
+    "mid_prior": 0.35,
+    "mid_margin_se": 0.75,
+    "solver_leaf_cards": 18,
+    "search_return": True,
+    "return_gap": 0.25,
+}
+
+
+def build_fastnet(model) -> "_core.FastNet | None":
+    """Construct pure-Rust `_core.FastNet` from either PyTorch `GuandanNet` or `NumpyNet`.
+    Returns `None` for non-LSTM or oracle architectures."""
+    try:
+        if hasattr(model, "state_dict"):
+            cfg = model.cfg.to_dict() if hasattr(model.cfg, "to_dict") else dict(model.cfg)
+            if cfg.get("arch", "lstm") != "lstm" or cfg.get("oracle", False):
+                return None
+            sd = model.state_dict()
+
+            def arr(k):
+                return np.ascontiguousarray(sd[k].detach().float().cpu().numpy(), dtype=np.float32)
+
+            w_ih = arr("lstm.weight_ih_l0")
+            w_hh = arr("lstm.weight_hh_l0")
+            b_lstm = arr("lstm.bias_ih_l0") + arr("lstm.bias_hh_l0")
+            l = int(w_hh.shape[1])
+            hist_len = int(cfg.get("hist_len", 24))
+
+            def collect_lin(prefix):
+                keys = [k[:-len(".weight")] for k in sd if k.startswith(prefix + ".") and k.endswith(".weight")]
+                keys.sort(key=lambda k: [int(x) for x in re.findall(r"\d+", k[len(prefix):])])
+                out = []
+                for k in keys:
+                    w = arr(k + ".weight")
+                    b = arr(k + ".bias")
+                    out.append((w.ravel().tolist(), b.ravel().tolist(), int(w.shape[0]), int(w.shape[1])))
+                return out
+
+            s_mlp = collect_lin("state_mlp")
+            head = collect_lin("head")
+            belief = None
+            if "belief.weight" in sd:
+                bw = arr("belief.weight")
+                bb = arr("belief.bias")
+                belief = (bw.ravel().tolist(), bb.ravel().tolist(), int(bw.shape[0]), int(bw.shape[1]))
+            return _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
+                                 b_lstm.ravel().tolist(), s_mlp, head, belief)
+
+        # NumpyNet path (weights stored transposed as [n_in, n_out])
+        cfg = getattr(model, "cfg", {})
+        if cfg.get("arch", "lstm") != "lstm" or cfg.get("oracle", False):
+            return None
+        w_ih = np.ascontiguousarray(model.w_ih.T, dtype=np.float32)
+        w_hh = np.ascontiguousarray(model.w_hh.T, dtype=np.float32)
+        b_lstm = np.ascontiguousarray(model.b, dtype=np.float32)
+        l = int(model.L)
+        hist_len = int(cfg.get("hist_len", 24))
+        s_mlp = [(np.ascontiguousarray(wt.T, np.float32).ravel().tolist(),
+                  np.ascontiguousarray(b, np.float32).ravel().tolist(),
+                  int(wt.shape[1]), int(wt.shape[0])) for wt, b in model.state_mlp]
+        head = [(np.ascontiguousarray(wt.T, np.float32).ravel().tolist(),
+                 np.ascontiguousarray(b, np.float32).ravel().tolist(),
+                 int(wt.shape[1]), int(wt.shape[0])) for wt, b in model.head]
+        belief = None
+        if getattr(model, "belief", None) is not None:
+            bwt, bb = model.belief
+            bw = np.ascontiguousarray(bwt.T, np.float32)
+            belief = (bw.ravel().tolist(), np.ascontiguousarray(bb, np.float32).ravel().tolist(),
+                      int(bw.shape[0]), int(bw.shape[1]))
+        return _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
+                             b_lstm.ravel().tolist(), s_mlp, head, belief)
+    except Exception:
+        return None
 
 
 class GameAgent:
-    """Wraps a model for single-game decisions in the battle server. Without PyTorch the
-    network runs in numpy (portable build); the play-out search then is not available, the
-    endgame search (Rust) is."""
+    """Wraps a model for single-game decisions in the battle server. Both PyTorch and portable
+    (PyTorch-free) builds share the pure-Rust `_core.FastNet` engine for fast CPU inference,
+    incremental-LSTM mid-game/return rollout search, SMC belief filtering, and exact endgame search."""
 
     def __init__(self, path_or_model, device="cpu", search: dict | None = None, endgame: dict | None = None):
         self.endgame = endgame
@@ -127,6 +237,8 @@ class GameAgent:
         else:
             self.model, self.meta, self.path = path_or_model, {}, None
             self.numpy = not hasattr(self.model, "parameters")
+        self.fastnet = build_fastnet(self.model)
+        self.threads = max(1, min(8, (os.cpu_count() or 4) // 2))
         self.searcher = None
         if self.numpy:
             return
@@ -138,6 +250,9 @@ class GameAgent:
 
     def _forward(self, game: "_core.Game", want_belief: bool = False):
         """Single forward pass returning (moves, q, belief_logits_list_or_None)."""
+        if self.fastnet is not None and (self.numpy or self.device.type == "cpu"):
+            moves, q_list, lg = self.fastnet.evaluate_game(game, want_belief)
+            return moves, np.asarray(q_list, np.float32), lg
         moves = game.legal_moves()
         s, h, a, n = game.encode()
         if self.numpy:
@@ -178,30 +293,91 @@ class GameAgent:
         if self.searcher is not None:
             return self.evaluate(game)[0][0]
         eg = self.endgame
-        in_eg = bool(eg and game.phase == 1 and game.cards_left() <= eg["cards"])
-        moves, q, lg = self._forward(game, want_belief=in_eg)
+        ph = game.phase
+        cl = game.cards_left()
+        in_eg = bool(eg and ph == 1 and cl <= eg["cards"])
+        in_mid = bool(eg and not in_eg and self.fastnet is not None and eg.get("mid_rollout", False)
+                      and (ph == 0 or (ph == 1 and cl <= eg.get("mid_max_cards", 56))))
+        moves, q, lg = self._forward(game, want_belief=(in_eg or in_mid))
         if not len(moves):
             return (0, 0, [])
         net = int(np.argmax(q))
-        if in_eg and len(moves) > 1:
+        if len(moves) > 1 and eg:
+            ql = (q * 3.0).tolist()
+            th = eg.get("threads", self.threads)
             try:
-                i = game.endgame_choose(
-                    net,
-                    None,
-                    cards=eg["cards"],
-                    worlds=eg["worlds"],
-                    floor=eg.get("floor", 0.02),
-                    max_nodes=eg.get("max_nodes", 250_000),
-                    margin=eg.get("margin", 0.0),
-                    seed=random.getrandbits(63),
-                    belief_logits=lg,
-                    q_levels=(q * 3.0).tolist(),
-                    prior=eg.get("prior", 0.25),
-                    max_cands=eg.get("max_cands", 12),
-                    q_gap=eg.get("q_gap", 1.2),
-                )
-                if i is not None:
-                    return moves[i]
+                if in_eg:
+                    smc_ov = eg.get("smc_oversample", 1)
+                    if self.fastnet is not None and smc_ov > 1:
+                        i = self.fastnet.endgame_choose_smc(
+                            game,
+                            net,
+                            ql,
+                            lg,
+                            cards=eg["cards"],
+                            worlds=eg["worlds"],
+                            floor=eg.get("floor", 0.02),
+                            bomb_gamma=eg.get("bomb_gamma", 0.25),
+                            max_nodes=eg.get("max_nodes", 250_000),
+                            margin=eg.get("margin", 0.0),
+                            prior=eg.get("prior", 0.25),
+                            max_cands=eg.get("max_cands", 12),
+                            q_gap=eg.get("q_gap", 1.2),
+                            smc_oversample=smc_ov,
+                            smc_last_k=eg.get("smc_last_k", 6),
+                            threads=th,
+                            seed=random.getrandbits(63),
+                        )
+                    else:
+                        i = game.endgame_choose(
+                            net,
+                            None,
+                            cards=eg["cards"],
+                            worlds=eg["worlds"],
+                            floor=eg.get("floor", 0.02),
+                            max_nodes=eg.get("max_nodes", 250_000),
+                            margin=eg.get("margin", 0.0),
+                            threads=th,
+                            seed=random.getrandbits(63),
+                            belief_logits=lg,
+                            q_levels=ql,
+                            prior=eg.get("prior", 0.25),
+                            max_cands=eg.get("max_cands", 12),
+                            q_gap=eg.get("q_gap", 1.2),
+                            bomb_gamma=eg.get("bomb_gamma", 0.25),
+                        )
+                    if i is not None:
+                        return moves[i]
+                elif in_mid:
+                    sec_q = float(np.partition(q, -2)[-2]) * 3.0
+                    gap_lim = eg.get("return_gap", 0.20) if ph == 0 else eg.get("mid_close_gap", 0.08)
+                    if float(q[net]) * 3.0 - sec_q <= gap_lim:
+                        i = self.fastnet.rollout_choose(
+                            game,
+                            net,
+                            ql,
+                            lg,
+                            min_cards=eg["cards"] + 1,
+                            max_cards=eg.get("mid_max_cards", 56),
+                            worlds=eg.get("mid_worlds", 16),
+                            top_k=eg.get("mid_top_k", 3),
+                            close_gap=eg.get("mid_close_gap", 0.08),
+                            max_cand_gap=eg.get("mid_max_cand_gap", 0.45),
+                            prior=eg.get("mid_prior", 0.35),
+                            margin_se=eg.get("mid_margin_se", 0.75),
+                            floor=eg.get("floor", 0.02),
+                            bomb_gamma=eg.get("bomb_gamma", 0.25),
+                            solver_leaf_cards=eg.get("solver_leaf_cards", 18),
+                            search_return=eg.get("search_return", True),
+                            return_gap=eg.get("return_gap", 0.20),
+                            return_top_k=eg.get("return_top_k", 4),
+                            smc_oversample=1,
+                            smc_last_k=6,
+                            threads=th,
+                            seed=random.getrandbits(63),
+                        )
+                        if i is not None:
+                            return moves[i]
             except Exception:
                 pass  # the network's move is always a safe fallback
         return moves[net]

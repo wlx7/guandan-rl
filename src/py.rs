@@ -270,7 +270,7 @@ impl PyGame {
     /// legal_moves() of a better move than `net_choice`, or None to keep the network's move.
     /// `belief_logits` = 324 belief logits (preferred); `expect` = 162 expected copies fallback;
     /// `q_levels` = network Q values in level units for all legal moves.
-    #[pyo3(signature = (net_choice, expect = None, cards = 20, worlds = 16, floor = 0.02, max_nodes = 400_000, margin = 0.0, threads = 4, seed = 0, belief_logits = None, q_levels = None, prior = 0.0, max_cands = 0, q_gap = 0.0))]
+    #[pyo3(signature = (net_choice, expect = None, cards = 20, worlds = 16, floor = 0.02, max_nodes = 400_000, margin = 0.0, threads = 4, seed = 0, belief_logits = None, q_levels = None, prior = 0.0, max_cands = 0, q_gap = 0.0, bomb_gamma = 0.0))]
     #[allow(clippy::too_many_arguments)]
     fn endgame_choose(
         &self,
@@ -289,6 +289,7 @@ impl PyGame {
         prior: f32,
         max_cands: usize,
         q_gap: f32,
+        bomb_gamma: f32,
     ) -> PyResult<Option<usize>> {
         let e = match expect {
             Some(v) if v.len() == 162 => {
@@ -309,13 +310,15 @@ impl PyGame {
         let cfg = crate::endgame::EndgameCfg { cards, worlds, floor, max_nodes, margin, prior, max_cands, q_gap, threads };
         let g = self.g.clone();
         Ok(py.allow_threads(move || {
-            crate::endgame::endgame_choose_ext(
+            crate::endgame::endgame_choose_full(
                 &g,
                 net_choice,
                 &cfg,
                 e.as_ref(),
                 belief_logits.as_deref(),
                 q_levels.as_deref(),
+                bomb_gamma,
+                None,
                 seed,
             )
         }))
@@ -362,14 +365,14 @@ impl PyGame {
     }
 
     /// Sample hidden hands from the network's 324 belief logits (see Game::determinize_belief).
-    #[pyo3(signature = (seed, logits, floor = 0.02, me = None))]
-    fn determinize_belief(&self, seed: u64, logits: Vec<f32>, floor: f32, me: Option<u8>) -> PyResult<Self> {
+    #[pyo3(signature = (seed, logits, floor = 0.02, me = None, bomb_gamma = 0.0))]
+    fn determinize_belief(&self, seed: u64, logits: Vec<f32>, floor: f32, me: Option<u8>, bomb_gamma: f32) -> PyResult<Self> {
         if logits.len() != HIDDEN_DIM {
             return Err(PyValueError::new_err("logits must have 324 values"));
         }
         let mut rng = Rng::new(seed);
         let me = me.unwrap_or(self.g.current);
-        Ok(PyGame { g: self.g.determinize_belief(me, &logits, floor, &mut rng) })
+        Ok(PyGame { g: self.g.determinize_belief_clustered(me, &logits, floor, bomb_gamma, &mut rng) })
     }
 
     fn round_reward(&self, team: u8) -> f32 {
@@ -637,11 +640,151 @@ fn kind_name(k: u8) -> String {
     Kind::from_u8(k).map(|k| k.name().to_string()).unwrap_or_default()
 }
 
+#[pyclass(name = "FastNet", module = "guandan._core")]
+#[derive(Clone)]
+pub struct PyFastNet {
+    inner: std::sync::Arc<crate::fastnet::FastNet>,
+}
+
+#[pymethods]
+impl PyFastNet {
+    #[new]
+    #[pyo3(signature = (l, hist_len, w_ih, w_hh, b_lstm, state_mlp, head, belief = None))]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn new(
+        l: usize,
+        hist_len: usize,
+        w_ih: Vec<f32>,
+        w_hh: Vec<f32>,
+        b_lstm: Vec<f32>,
+        state_mlp: Vec<(Vec<f32>, Vec<f32>, usize, usize)>,
+        head: Vec<(Vec<f32>, Vec<f32>, usize, usize)>,
+        belief: Option<(Vec<f32>, Vec<f32>, usize, usize)>,
+    ) -> PyResult<Self> {
+        let net = crate::fastnet::FastNet::new(l, hist_len, w_ih, w_hh, b_lstm, state_mlp, head, belief)
+            .map_err(PyValueError::new_err)?;
+        Ok(PyFastNet { inner: std::sync::Arc::new(net) })
+    }
+
+    #[pyo3(signature = (game, want_belief = false))]
+    fn evaluate_game(&self, py: Python<'_>, game: &PyGame, want_belief: bool) -> (Vec<PyMove>, Vec<f32>, Option<Vec<f32>>) {
+        let g = game.g.clone();
+        let net = self.inner.clone();
+        let (mvs, q, lg) = py.allow_threads(move || net.evaluate_game(&g, want_belief));
+        (mvs.iter().map(to_py).collect(), q, lg)
+    }
+
+    #[pyo3(signature = (game, net_choice, q_levels, belief_logits = None, min_cards = 27, max_cards = 56, worlds = 16, top_k = 3, close_gap = 0.08, max_cand_gap = 0.45, prior = 0.35, margin_se = 0.75, floor = 0.02, bomb_gamma = 0.0, solver_leaf_cards = 0, search_return = true, return_gap = 0.20, return_top_k = 4, smc_oversample = 1, smc_last_k = 6, threads = 8, seed = 0))]
+    #[allow(clippy::too_many_arguments)]
+    fn rollout_choose(
+        &self,
+        py: Python<'_>,
+        game: &PyGame,
+        net_choice: usize,
+        q_levels: Vec<f32>,
+        belief_logits: Option<Vec<f32>>,
+        min_cards: u32,
+        max_cards: u32,
+        worlds: usize,
+        top_k: usize,
+        close_gap: f32,
+        max_cand_gap: f32,
+        prior: f32,
+        margin_se: f32,
+        floor: f32,
+        bomb_gamma: f32,
+        solver_leaf_cards: u32,
+        search_return: bool,
+        return_gap: f32,
+        return_top_k: usize,
+        smc_oversample: usize,
+        smc_last_k: usize,
+        threads: usize,
+        seed: u64,
+    ) -> PyResult<Option<usize>> {
+        if let Some(ref lg) = belief_logits {
+            if lg.len() != HIDDEN_DIM {
+                return Err(PyValueError::new_err("belief_logits must have 324 values"));
+            }
+        }
+        let cfg = crate::fastnet::RolloutCfg {
+            min_cards,
+            max_cards,
+            worlds,
+            top_k,
+            close_gap,
+            max_cand_gap,
+            prior,
+            margin_se,
+            floor,
+            bomb_gamma,
+            solver_leaf_cards,
+            search_return,
+            return_gap,
+            return_top_k,
+            smc_oversample,
+            smc_last_k,
+            threads,
+        };
+        let g = game.g.clone();
+        let net = self.inner.clone();
+        Ok(py.allow_threads(move || net.rollout_choose(&g, net_choice, &q_levels, belief_logits.as_deref(), &cfg, seed)))
+    }
+
+    #[pyo3(signature = (game, net_choice, q_levels = None, belief_logits = None, cards = 26, worlds = 24, floor = 0.02, bomb_gamma = 0.0, max_nodes = 250_000, margin = 0.0, prior = 0.25, max_cands = 12, q_gap = 1.2, smc_oversample = 1, smc_last_k = 6, threads = 8, seed = 0))]
+    #[allow(clippy::too_many_arguments)]
+    fn endgame_choose_smc(
+        &self,
+        py: Python<'_>,
+        game: &PyGame,
+        net_choice: usize,
+        q_levels: Option<Vec<f32>>,
+        belief_logits: Option<Vec<f32>>,
+        cards: u32,
+        worlds: usize,
+        floor: f32,
+        bomb_gamma: f32,
+        max_nodes: u64,
+        margin: f32,
+        prior: f32,
+        max_cands: usize,
+        q_gap: f32,
+        smc_oversample: usize,
+        smc_last_k: usize,
+        threads: usize,
+        seed: u64,
+    ) -> PyResult<Option<usize>> {
+        if let Some(ref lg) = belief_logits {
+            if lg.len() != HIDDEN_DIM {
+                return Err(PyValueError::new_err("belief_logits must have 324 values"));
+            }
+        }
+        let cfg = crate::endgame::EndgameCfg { cards, worlds, floor, max_nodes, margin, prior, max_cands, q_gap, threads };
+        let g = game.g.clone();
+        let net = self.inner.clone();
+        Ok(py.allow_threads(move || {
+            let smc = if smc_oversample > 1 { Some((net.as_ref(), smc_oversample, smc_last_k)) } else { None };
+            crate::endgame::endgame_choose_full(
+                &g,
+                net_choice,
+                &cfg,
+                None,
+                belief_logits.as_deref(),
+                q_levels.as_deref(),
+                bomb_gamma,
+                smc,
+                seed,
+            )
+        }))
+    }
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGame>()?;
     m.add_class::<PyVecEnv>()?;
     m.add_class::<PyRollouts>()?;
+    m.add_class::<PyFastNet>()?;
     m.add_function(wrap_pyfunction!(dims, m)?)?;
     m.add_function(wrap_pyfunction!(hidden_dim, m)?)?;
     m.add_function(wrap_pyfunction!(classify_cards, m)?)?;
