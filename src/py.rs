@@ -266,10 +266,11 @@ impl PyGame {
         Ok(py.allow_threads(move || crate::endgame::solve_moves(&g, &mv, max_nodes)))
     }
 
-    /// Endgame search for the player to move (see endgame::endgame_choose): index into
+    /// Endgame search for the player to move (see endgame::endgame_choose_ext): index into
     /// legal_moves() of a better move than `net_choice`, or None to keep the network's move.
-    /// `expect` = the network's belief as 3 x 54 expected card copies (flattened), or None.
-    #[pyo3(signature = (net_choice, expect = None, cards = 20, worlds = 16, floor = 0.02, max_nodes = 400_000, margin = 0.0, threads = 4, seed = 0))]
+    /// `belief_logits` = 324 belief logits (preferred); `expect` = 162 expected copies fallback;
+    /// `q_levels` = network Q values in level units for all legal moves.
+    #[pyo3(signature = (net_choice, expect = None, cards = 20, worlds = 16, floor = 0.02, max_nodes = 400_000, margin = 0.0, threads = 4, seed = 0, belief_logits = None, q_levels = None, prior = 0.0, max_cands = 0, q_gap = 0.0))]
     #[allow(clippy::too_many_arguments)]
     fn endgame_choose(
         &self,
@@ -283,6 +284,11 @@ impl PyGame {
         margin: f32,
         threads: usize,
         seed: u64,
+        belief_logits: Option<Vec<f32>>,
+        q_levels: Option<Vec<f32>>,
+        prior: f32,
+        max_cands: usize,
+        q_gap: f32,
     ) -> PyResult<Option<usize>> {
         let e = match expect {
             Some(v) if v.len() == 162 => {
@@ -295,9 +301,24 @@ impl PyGame {
             Some(_) => return Err(PyValueError::new_err("expect must have 162 values")),
             None => None,
         };
-        let cfg = crate::endgame::EndgameCfg { cards, worlds, floor, max_nodes, margin, threads };
+        if let Some(ref lg) = belief_logits {
+            if lg.len() != HIDDEN_DIM {
+                return Err(PyValueError::new_err("belief_logits must have 324 values"));
+            }
+        }
+        let cfg = crate::endgame::EndgameCfg { cards, worlds, floor, max_nodes, margin, prior, max_cands, q_gap, threads };
         let g = self.g.clone();
-        Ok(py.allow_threads(move || crate::endgame::endgame_choose(&g, net_choice, &cfg, e.as_ref(), seed)))
+        Ok(py.allow_threads(move || {
+            crate::endgame::endgame_choose_ext(
+                &g,
+                net_choice,
+                &cfg,
+                e.as_ref(),
+                belief_logits.as_deref(),
+                q_levels.as_deref(),
+                seed,
+            )
+        }))
     }
 
     /// The other three hands seen from player `me` (default: the player to move), 324 bits:
@@ -338,6 +359,17 @@ impl PyGame {
         let mut rng = Rng::new(seed);
         let me = me.unwrap_or(self.g.current);
         Ok(PyGame { g: self.g.determinize_weighted(me, &e, floor, &mut rng) })
+    }
+
+    /// Sample hidden hands from the network's 324 belief logits (see Game::determinize_belief).
+    #[pyo3(signature = (seed, logits, floor = 0.02, me = None))]
+    fn determinize_belief(&self, seed: u64, logits: Vec<f32>, floor: f32, me: Option<u8>) -> PyResult<Self> {
+        if logits.len() != HIDDEN_DIM {
+            return Err(PyValueError::new_err("logits must have 324 values"));
+        }
+        let mut rng = Rng::new(seed);
+        let me = me.unwrap_or(self.g.current);
+        Ok(PyGame { g: self.g.determinize_belief(me, &logits, floor, &mut rng) })
     }
 
     fn round_reward(&self, team: u8) -> f32 {

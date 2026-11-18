@@ -18,6 +18,17 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.13.0
+
+- **突破训练平台期，实战棋力显著增强**：在同一个 211 亿样本随包模型上，全面重构了手牌信念抽样与残局精确搜索引擎：
+  - **更准的手牌推断**（`Game::determinize_belief`）：完整使用手牌预测头的 324 维双张概率（修复此前单值期望导致对手同花色对子与炸弹被严重低估的偏差），加入 Sinkhorn 双向边际校准、按剩余张数比例缩放的保底权重，以及进贡上限 / 抗贡大王硬约束，残局“报单”命中率从 52.3% 提升到 **68.2%**。
+  - **残局求解提速数十倍、搜索提前到剩 26 张（深度模式 30 张）**：无堆分配招法生成、按已出完名次收紧精确上下界剪枝、花色等价 Zobrist 置换表、被迫“不出”快进与按网络 Q 值候选剪枝，单步耗时仅约 20 毫秒（深度模式约 40 毫秒）。
+  - **修复残局平局选牌偏差并融合网络先验**：修复此前多个候选同分时 `max_by` 偏向最后一项（高点数或炸弹）的问题，改为融合网络 Q 值打破平局并抑制完全信息乐观偏差；竞技模式下精确区分“庄家过 A 直接赢整场”。
+- **独立新牌实测**：对不搜索的随包网络，默认模式每局 **+0.083 ± 0.006 级**（胜率 50.65%，4,000 副复式牌），深度模式每局 **+0.104 ± 0.008 级**（胜率 51.02%，3,000 副复式牌），搜索收益约为旧版的 3 倍；直接与 **v1.12.1 默认 AI** 对打，每局多赢 **+0.056 ± 0.007 级**（3,000 副复式牌），带进还贡打过 A 的完整比赛 512 场赢 **281 场（54.9% ± 1.8%，小局胜率 51.4%）**。
+- 电脑版、Windows 免安装版、安卓 App 同步升级；随包模型体积不变（11 MB）。
+
+**English.** Breaking past the self-play training plateau on the same 21.1B-sample network via a rebuilt belief-posterior sampler and exact endgame solver: (1) `determinize_belief` uses all 324 two-copy belief logits with Sinkhorn-Knopp marginal calibration, capacity-scaled floors, exact two-copy Bayes correlation, and hard tribute / anti-tribute deductions (1-card-left hit rate rises from 52.3% to 68.2%); (2) zero-allocation move generation, tight placement-bound alpha-beta cutoffs, suit-canonical Zobrist hashing, and Q-guided root pruning speed up the solver by an order of magnitude so default play now searches from 26 cards left (deep mode: 30 cards) in ~20–40 ms; (3) PIMC values are regularized with the network's Q values (fixing a tie-breaking bias toward high-index bombs). On unseen duplicate deals, v1.13.0 gains **+0.083 ± 0.006** levels/round (deep: **+0.104 ± 0.008**) over the raw network, beats **v1.12.1** head-to-head by **+0.056 ± 0.007** levels/round, and wins **281 / 512 (54.9%)** full matches with tribute through level A.
+
 ### v1.12.1
 
 - 修正“开一桌”页面的提示：已经有牌桌在打时，以前会错误地提示“开新桌会结束它”。其实从 v1.7.2 起可以同时开几桌，新开一桌不影响原来的牌桌；现在提示改为“已有 N 桌在进行，新开一桌不影响它们（最多同时 8 桌）”，开满 8 桌时提示先关掉不用的牌桌。

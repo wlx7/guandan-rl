@@ -31,14 +31,16 @@ def _seg_max(q, off):
 
 class SearchAgent:
     def __init__(self, model, device="cpu", top_k=5, samples=12, depth=14, prior=0.25,
-                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02, guided=None, margin=2.0):
+                 belief=0, belief_last=12, belief_temp=0.5, belief_floor=0.02, guided=None, margin=2.0,
+                 close_gap=None):
         self.model = model
         self.device = torch.device(device)
         self.policy = BatchPolicy(model, device)
         self.top_k = top_k
         self.samples = samples
-        self.depth = depth
+        self.depth = depth  # 0 = play out all the way to RoundOver (avoids cross-player leaf value bias)
         self.prior = prior
+        self.close_gap = close_gap  # if set (in levels), only search decisions with q[0] - q[1] <= close_gap
         # belief > 0: draw `belief` times more candidate worlds and keep them in proportion to
         # how likely the other players' recent plays were in each world, judged by the network
         # (softmax of its values with temperature `belief_temp` levels, at least `belief_floor`
@@ -65,17 +67,11 @@ class SearchAgent:
 
     # ------------------------------------------------------------------ beliefs
     @torch.no_grad()
-    def _expected_hands(self, s, h):
-        """Expected copies of every card type in the three other hands (players 1, 2, 3 seats
-        after the one to move), from the belief head: [B, 162]."""
+    def _belief_logits(self, s, h):
         d = self.device
         st = torch.from_numpy(np.ascontiguousarray(s)).to(d).float()
         ht = torch.from_numpy(np.ascontiguousarray(h)).to(d).float()
-        p = torch.sigmoid(self.model.belief_logits(self.model.encode_state(st, ht))).float().cpu().numpy()
-        p = p.reshape(len(p), 3, 54, 2)
-        p1 = p[..., 0]
-        p2 = np.minimum(p[..., 1], p1)
-        return (p1 + p2).reshape(len(p), 162)
+        return self.model.belief_logits(self.model.encode_state(st, ht)).float().cpu().numpy()
 
     def _log_likelihood(self, worlds, mes):
         """log P(recent plays of the other players | world) under the network's soft policy."""
@@ -115,12 +111,14 @@ class SearchAgent:
 
     # ------------------------------------------------------------------ play-outs
     def _simulate(self, sims, teams):
-        """Value (in levels, for `teams[i]`) of every simulated game after `depth` greedy moves."""
+        """Value (in levels, for `teams[i]`) of every simulated game after `depth` greedy moves
+        (or at the end of the round when `depth <= 0`)."""
         ro = _core.Rollouts(sims)
         values = np.full(len(sims), np.nan, np.float32)
         teams = np.asarray(teams)
-        for step in range(self.depth + 1):
-            last = step == self.depth
+        max_steps = self.depth if self.depth > 0 else 500
+        for step in range(max_steps + 1):
+            last = self.depth > 0 and step == self.depth
             idx, players, s, h, a, off = ro.observe()
             if not idx:
                 break
@@ -163,17 +161,20 @@ class SearchAgent:
                 out[gi] = [(0, float(q[0]), float(q[0]), True)]
                 continue
             order = np.argsort(-q)
+            if self.close_gap is not None and float(q[order[0]] - q[order[1]]) > self.close_gap:
+                out[gi] = [(int(i), float(q[i]), float(q[i]), False) for i in order]
+                continue
             plan[gi] = (q, order, order[: self.top_k])
         # sampled worlds for every game that needs a search
         all_worlds = {}
-        expect = self._expected_hands(s, h) if (self.guided is not None and plan) else None
+        logits = self._belief_logits(s, h) if (self.guided is not None and plan) else None
         for gi in plan:
             g = games[gi]
             base = next(_seed) * 7919
             m = self.samples * max(1, self.belief)
-            if expect is not None:
-                e = expect[gi].tolist()
-                all_worlds[gi] = [g.determinize_weighted(base + j, e, self.guided) for j in range(m)]
+            if logits is not None:
+                lg = logits[gi].tolist()
+                all_worlds[gi] = [g.determinize_belief(base + j, lg, self.guided) for j in range(m)]
             else:
                 all_worlds[gi] = [g.determinize(base + j) for j in range(m)]
         if self.belief > 1 and plan:

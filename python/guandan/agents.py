@@ -101,10 +101,11 @@ def choose_from_q(q, off, epsilon=0.0, rng: np.random.Generator | None = None, t
 
 
 # exact endgame search when playing (see endgame.rs / endgame.py): once at most `cards` cards
-# are left, `worlds` deals of the hidden cards are sampled from the network's belief and every
-# legal move is solved exactly in each; measured +0.03 levels/round (20,16) and +0.045 (24,32)
-ENDGAME_FAST = {"cards": 20, "worlds": 16, "floor": 0.02, "max_nodes": 400_000}
-ENDGAME_DEEP = {"cards": 24, "worlds": 32, "floor": 0.02, "max_nodes": 150_000}
+# are left, `worlds` deals of the hidden cards are sampled from the calibrated belief posterior
+# (full 324 logits + Sinkhorn IPF + 2-copy Bayes + tribute deductions) and top candidate moves
+# within `q_gap` levels are solved exactly and blended with `prior * q_net`
+ENDGAME_FAST = {"cards": 26, "worlds": 24, "floor": 0.02, "max_nodes": 250_000, "prior": 0.25, "max_cands": 12, "q_gap": 1.2}
+ENDGAME_DEEP = {"cards": 30, "worlds": 32, "floor": 0.02, "max_nodes": 250_000, "prior": 0.25, "max_cands": 12, "q_gap": 1.0}
 
 
 class GameAgent:
@@ -135,69 +136,75 @@ class GameAgent:
             from .search import SearchAgent
             self.searcher = SearchAgent(self.model, device, **search)
 
-    def evaluate(self, game: "_core.Game"):
-        """Returns [(move, q)] sorted by q descending, where move = (kind, key, cards).
-        q is in units of 3 levels (multiply by 3 for expected level change)."""
-        if self.searcher is not None:
-            return [(m, sc / 3.0) for m, sc, _, _ in self.searcher.evaluate(game)]
+    def _forward(self, game: "_core.Game", want_belief: bool = False):
+        """Single forward pass returning (moves, q, belief_logits_list_or_None)."""
         moves = game.legal_moves()
         s, h, a, n = game.encode()
         if self.numpy:
             st = np.frombuffer(bytes(s), np.uint8).reshape(1, STATE_DIM)
             ht = np.frombuffer(bytes(h), np.uint8).reshape(1, HIST_LEN, HIST_DIM)
             at = np.frombuffer(bytes(a), np.uint8).reshape(n, ACTION_DIM)
-            q = self.model.score(self.model.encode_state(st, ht), at)
-        else:
-            q = self._q_torch(s, h, a, n)
-        order = np.argsort(-q)
-        return [(moves[i], float(q[i])) for i in order]
+            z = self.model.encode_state(st, ht)
+            q = self.model.score(z, at)
+            lg = None
+            if want_belief and getattr(self.model, "belief", None) is not None:
+                lg = np.asarray(self.model.belief_logits(z)[0], np.float32).tolist()
+            return moves, q, lg
+        return moves, *self._forward_torch(s, h, a, n, want_belief)
 
     @_no_grad
-    def _q_torch(self, s, h, a, n):
+    def _forward_torch(self, s, h, a, n, want_belief: bool):
         d = self.device
         st = torch.frombuffer(bytearray(s), dtype=torch.uint8).view(1, STATE_DIM).to(d).float()
         ht = torch.frombuffer(bytearray(h), dtype=torch.uint8).view(1, HIST_LEN, HIST_DIM).to(d).float()
         at = torch.frombuffer(bytearray(a), dtype=torch.uint8).view(n, ACTION_DIM).to(d).float()
-        z = self.model.encode_state(st, ht).expand(n, -1)
-        return self.model.score(z, at).float().cpu().numpy()
+        z = self.model.encode_state(st, ht)
+        q = self.model.score(z.expand(n, -1), at).float().cpu().numpy()
+        lg = None
+        if want_belief and getattr(self.model.cfg, "belief", False):
+            lg = self.model.belief_logits(z)[0].float().cpu().numpy().tolist()
+        return q, lg
 
-    def _belief_expect(self, game):
-        """The network's expected copies of every card type in the other three hands (162
-        values, see Game.determinize_weighted), or None without a belief head."""
-        s, h, _a, _n = game.encode()
-        if self.numpy:
-            if getattr(self.model, "belief", None) is None:
-                return None
-            st = np.frombuffer(bytes(s), np.uint8).reshape(1, STATE_DIM)
-            ht = np.frombuffer(bytes(h), np.uint8).reshape(1, HIST_LEN, HIST_DIM)
-            lg = np.asarray(self.model.belief_logits(self.model.encode_state(st, ht)), np.float64)
-        else:
-            if not getattr(self.model.cfg, "belief", False):
-                return None
-            with torch.no_grad():
-                d = self.device
-                st = torch.frombuffer(bytearray(s), dtype=torch.uint8).view(1, STATE_DIM).to(d).float()
-                ht = torch.frombuffer(bytearray(h), dtype=torch.uint8).view(1, HIST_LEN, HIST_DIM).to(d).float()
-                lg = self.model.belief_logits(self.model.encode_state(st, ht)).float().cpu().numpy().astype(np.float64)
-        p = (1.0 / (1.0 + np.exp(-lg))).reshape(3, 54, 2)
-        return (p[..., 0] + np.minimum(p[..., 1], p[..., 0])).reshape(162).tolist()
+    def evaluate(self, game: "_core.Game"):
+        """Returns [(move, q)] sorted by q descending, where move = (kind, key, cards).
+        q is in units of 3 levels (multiply by 3 for expected level change)."""
+        if self.searcher is not None:
+            return [(m, sc / 3.0) for m, sc, _, _ in self.searcher.evaluate(game)]
+        moves, q, _ = self._forward(game, want_belief=False)
+        order = np.argsort(-q)
+        return [(moves[i], float(q[i])) for i in order]
 
     def choose(self, game):
-        ev = self.evaluate(game)
-        best = ev[0][0]
+        if self.searcher is not None:
+            return self.evaluate(game)[0][0]
         eg = self.endgame
-        if eg and len(ev) > 1 and game.phase == 1 and game.cards_left() <= eg["cards"]:
+        in_eg = bool(eg and game.phase == 1 and game.cards_left() <= eg["cards"])
+        moves, q, lg = self._forward(game, want_belief=in_eg)
+        if not len(moves):
+            return (0, 0, [])
+        net = int(np.argmax(q))
+        if in_eg and len(moves) > 1:
             try:
-                moves = game.legal_moves()
-                net = next(i for i, m in enumerate(moves) if m[0] == best[0] and m[1] == best[1] and list(m[2]) == list(best[2]))
-                i = game.endgame_choose(net, self._belief_expect(game), cards=eg["cards"], worlds=eg["worlds"],
-                                        floor=eg.get("floor", 0.02), max_nodes=eg.get("max_nodes", 400_000),
-                                        seed=random.getrandbits(63))
+                i = game.endgame_choose(
+                    net,
+                    None,
+                    cards=eg["cards"],
+                    worlds=eg["worlds"],
+                    floor=eg.get("floor", 0.02),
+                    max_nodes=eg.get("max_nodes", 250_000),
+                    margin=eg.get("margin", 0.0),
+                    seed=random.getrandbits(63),
+                    belief_logits=lg,
+                    q_levels=(q * 3.0).tolist(),
+                    prior=eg.get("prior", 0.25),
+                    max_cands=eg.get("max_cands", 12),
+                    q_gap=eg.get("q_gap", 1.2),
+                )
                 if i is not None:
                     return moves[i]
             except Exception:
                 pass  # the network's move is always a safe fallback
-        return best
+        return moves[net]
 
 
 def random_move(game, allow_pass=False):

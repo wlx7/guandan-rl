@@ -106,12 +106,22 @@ def make_player(spec, device="cpu", search="", endgame="", oracle_search=""):
         return OracleSearchPlayer(m, OracleSearch(m, o, device, top_k=k, worlds=w, beta=beta), device, eg)
     if endgame:
         from .endgame import EndgameSearch
-        parts = endgame.split(",")
-        guided = float(parts[2]) if len(parts) > 2 and float(parts[2]) > 0 else None
-        margin = float(parts[3]) if len(parts) > 3 else 0.0
-        max_nodes = int(parts[4]) if len(parts) > 4 else 400_000
-        es = EndgameSearch(m, device, cards=int(parts[0]), worlds=int(parts[1]), guided=guided, margin=margin,
-                           max_nodes=max_nodes)
+        if endgame == "fast":
+            es = EndgameSearch(m, device, cards=26, worlds=24, guided=0.02, max_nodes=250_000, prior=0.25, max_cands=12, q_gap=1.2)
+        elif endgame == "deep":
+            es = EndgameSearch(m, device, cards=30, worlds=32, guided=0.02, max_nodes=250_000, prior=0.25, max_cands=12, q_gap=1.0)
+        else:
+            parts = endgame.split(",")
+            guided = float(parts[2]) if len(parts) > 2 else 0.02
+            if guided <= 0:
+                guided = None
+            margin = float(parts[3]) if len(parts) > 3 else 0.0
+            max_nodes = int(parts[4]) if len(parts) > 4 else 250_000
+            prior = float(parts[5]) if len(parts) > 5 else 0.25
+            max_cands = int(parts[6]) if len(parts) > 6 else 12
+            q_gap = float(parts[7]) if len(parts) > 7 else 1.2
+            es = EndgameSearch(m, device, cards=int(parts[0]), worlds=int(parts[1]), guided=guided, margin=margin,
+                               max_nodes=max_nodes, prior=prior, max_cands=max_cands, q_gap=q_gap)
         return EndgamePlayer(m, es, device)
     if not search:
         return NetPlayer(m, device)

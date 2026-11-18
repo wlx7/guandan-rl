@@ -66,14 +66,36 @@ class EndgamePlayer:
     cards are left."""
 
     def __init__(self, model, searcher, device="cpu"):
-        self.net = NetPlayer(model, device)
+        import torch
+        self.torch = torch
+        self.model = model
+        self.device = torch.device(device)
         self.searcher = searcher
 
     def act(self, ro, obs, rows):
-        ch = self.net.act(ro, obs, rows)
-        idx = obs[0]
-        games = [ro.game(int(idx[r])) for r in rows]
-        return np.asarray(self.searcher.choose_many(games, ch), np.int64)
+        torch = self.torch
+        idx, _, s, h, a, off = obs
+        rows = np.asarray(rows, np.int64)
+        b = len(rows)
+        if b == 0:
+            return np.zeros(0, np.int64)
+        ss, hh, aa, oo = subset_obs(s, h, a, off, rows)
+        n = np.diff(oo)
+        with torch.no_grad():
+            st = torch.from_numpy(np.ascontiguousarray(ss)).to(self.device).float()
+            ht = torch.from_numpy(np.ascontiguousarray(hh)).to(self.device).float()
+            at = torch.from_numpy(np.ascontiguousarray(aa)).to(self.device).float()
+            seg = torch.from_numpy(np.repeat(np.arange(b), n)).to(self.device)
+            z = self.model.encode_state(st, ht)
+            q = self.model.score(z.index_select(0, seg), at).float().cpu().numpy()
+            ch = [int(np.argmax(q[oo[j]:oo[j + 1]])) for j in range(b)]
+            games = [ro.game(int(idx[r])) for r in rows]
+            ql = [(q[oo[j]:oo[j + 1]] * 3.0).tolist() for j in range(b)]
+            lg = None
+            if self.searcher.guided is not None and any(self.searcher.wants(g) for g in games):
+                lg_np = self.model.belief_logits(z).float().cpu().numpy()
+                lg = [lg_np[j].tolist() for j in range(b)]
+        return np.asarray(self.searcher.choose_many(games, ch, ql, lg), np.int64)
 
 
 class OracleSearchPlayer:
