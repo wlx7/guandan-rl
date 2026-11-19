@@ -73,22 +73,25 @@ pub fn choose(net: &Net, g: &Game, deep: bool) -> Move {
         } else {
             let ro_cfg = RolloutCfg {
                 min_cards: cfg.cards + 1,
-                max_cards: 56,
-                worlds: if deep { 16 } else { 12 },
-                top_k: if deep { 4 } else { 3 },
-                close_gap: if deep { 0.10 } else { 0.08 },
+                max_cards: 80,
+                early_cards: 56,
+                early_close_gap: if deep { 0.08 } else { 0.06 },
+                worlds: if deep { 20 } else { 16 },
+                top_k: if deep { 5 } else { 4 },
+                close_gap: if deep { 0.12 } else { 0.10 },
                 max_cand_gap: 0.45,
                 prior: 0.35,
                 margin_se: 0.75,
                 floor: cfg.floor,
                 bomb_gamma: 0.25,
-                solver_leaf_cards: 18,
+                solver_leaf_cards: 20,
                 search_return: true,
-                return_gap: if deep { 0.25 } else { 0.20 },
-                return_top_k: 4,
-                smc_oversample: 1,
+                return_gap: if deep { 0.25 } else { 0.22 },
+                return_top_k: 5,
+                smc_oversample: 2,
                 smc_last_k: 6,
                 threads: cfg.threads,
+                ..RolloutCfg::default()
             };
             if let Some(i) = net.fast.rollout_choose(g, best, &q_levels, logits.as_deref(), &ro_cfg, rand::random::<u64>()) {
                 return moves[i].clone();
