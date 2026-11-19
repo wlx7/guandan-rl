@@ -556,6 +556,15 @@ impl PyGame {
     fn describe(&self, kind: u8, key: u8, cards: Vec<u8>) -> PyResult<String> {
         Ok(from_py(kind, key, cards)?.describe(self.g.level))
     }
+
+    /// Canonical Team-0 public state + public history (`(pub_state, pub_hist)`), zero private hand info.
+    fn encode_public<'py>(&self, py: Python<'py>) -> (Bound<'py, PyBytes>, Bound<'py, PyBytes>) {
+        let mut sp = vec![0u8; crate::pbs::PUB_STATE_DIM];
+        let mut hp = vec![0u8; HIST_LEN * HIST_DIM];
+        crate::pbs::encode_public_state(&self.g, &mut sp);
+        crate::pbs::encode_public_history(&self.g, &mut hp);
+        (PyBytes::new(py, &sp), PyBytes::new(py, &hp))
+    }
 }
 
 #[pyclass(name = "Rollouts", module = "guandan._core")]
@@ -779,13 +788,163 @@ impl PyFastNet {
     }
 }
 
+#[pyclass(name = "PubBelief", module = "guandan._core")]
+#[derive(Clone)]
+pub struct PyPubBelief {
+    inner: crate::pbs::PubBelief,
+}
+
+#[pymethods]
+impl PyPubBelief {
+    #[new]
+    fn new(game: &PyGame) -> Self {
+        PyPubBelief { inner: crate::pbs::PubBelief::from_game(&game.g) }
+    }
+
+    /// Build `PubBelief` by replaying `game.history` from `play_start` (or `from_game` if at round start),
+    /// using ONLY public observations!
+    #[staticmethod]
+    fn from_public_history(game: &PyGame) -> Self {
+        if let Some(mut skel) = game.g.play_start() {
+            let mut pb = crate::pbs::PubBelief::from_game(&skel);
+            for (p, mv) in &game.g.history {
+                let plp = skel.last_player;
+                let plm = skel.last_move.clone();
+                if skel.apply(mv).is_err() {
+                    break;
+                }
+                pb.observe_step(plm.as_ref().map(|m| (plp, m)), *p, mv, &skel);
+            }
+            pb.recalibrate(&game.g);
+            PyPubBelief { inner: pb }
+        } else {
+            PyPubBelief { inner: crate::pbs::PubBelief::from_game(&game.g) }
+        }
+    }
+
+    fn copy(&self) -> Self {
+        self.clone()
+    }
+
+    fn recalibrate(&mut self, game: &PyGame) {
+        self.inner.recalibrate(&game.g);
+    }
+
+    fn observe_step(&mut self, prev_last_player: u8, prev_last: Option<PyMove>, actor: u8, mv: PyMove, game_after: &PyGame) -> PyResult<()> {
+        let pm = match prev_last {
+            Some((k, key, c)) => Some(from_py(k, key, c)?),
+            None => None,
+        };
+        let m = from_py(mv.0, mv.1, mv.2)?;
+        self.inner.observe_step(pm.as_ref().map(|x| (prev_last_player, x)), actor, &m, &game_after.g);
+        Ok(())
+    }
+
+    #[pyo3(signature = (game_after, actor, world_games, weights, blend = 0.5))]
+    fn bayes_policy_update(&mut self, game_after: &PyGame, actor: u8, world_games: Vec<PyRef<PyGame>>, weights: Vec<f32>, blend: f32) {
+        let hands: Vec<Hand> = world_games.iter().map(|w| w.g.hands[(actor & 3) as usize]).collect();
+        self.inner.bayes_policy_update(&game_after.g, actor, &hands, &weights, blend);
+    }
+
+    fn vec_abs(&self) -> Vec<f32> {
+        let mut out = vec![0.0f32; crate::pbs::PBS_DIM];
+        self.inner.write_abs(&mut out);
+        out
+    }
+
+    fn vec_rel(&self, me: u8) -> Vec<f32> {
+        let mut out = vec![0.0f32; crate::pbs::PBS_DIM];
+        self.inner.write_rel(me, &mut out);
+        out
+    }
+
+    #[pyo3(signature = (game, seed, me = None))]
+    fn sample_world(&self, game: &PyGame, seed: u64, me: Option<u8>) -> PyGame {
+        let mut rng = Rng::new(seed);
+        PyGame { g: self.inner.sample_world(&game.g, me, &mut rng) }
+    }
+}
+
+#[pyclass(name = "PbsVecEnv", module = "guandan._core")]
+pub struct PyPbsVecEnv {
+    inner: crate::pbs::PbsVecEnv,
+}
+
+#[pymethods]
+impl PyPbsVecEnv {
+    #[new]
+    #[pyo3(signature = (n, seed, random_levels = true, a_fail_limit = 3, tribute = true))]
+    fn new(n: usize, seed: u64, random_levels: bool, a_fail_limit: u8, tribute: bool) -> Self {
+        PyPbsVecEnv {
+            inner: crate::pbs::PbsVecEnv::new(n, seed, random_levels, Rules { a_fail_limit, tribute }),
+        }
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn observe<'py>(
+        &mut self,
+        py: Python<'py>,
+    ) -> (
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Bound<'py, PyBytes>,
+        Vec<u32>,
+        Bound<'py, PyBytes>,
+    ) {
+        let (pl, sp, pub_s, pbs_r, pbs_a, h, a, off, h108) = self.inner.observe();
+        (
+            PyBytes::new(py, &pl),
+            PyBytes::new(py, &sp),
+            PyBytes::new(py, &pub_s),
+            PyBytes::new(py, &f32_bytes(&pbs_r)),
+            PyBytes::new(py, &f32_bytes(&pbs_a)),
+            PyBytes::new(py, &h),
+            PyBytes::new(py, &a),
+            off,
+            PyBytes::new(py, &h108),
+        )
+    }
+
+    fn step<'py>(&mut self, py: Python<'py>, choices: Vec<u32>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+        if choices.len() != self.inner.len() {
+            return Err(PyValueError::new_err("choices length mismatch"));
+        }
+        let (dones, rews) = self.inner.step(&choices);
+        Ok((PyBytes::new(py, &dones), PyBytes::new(py, &f32_bytes(&rews))))
+    }
+
+    fn game(&self, i: usize) -> PyGame {
+        PyGame { g: self.inner.games[i].clone() }
+    }
+
+    fn belief(&self, i: usize) -> PyPubBelief {
+        PyPubBelief { inner: self.inner.beliefs[i].clone() }
+    }
+}
+
+#[pyfunction]
+fn pbs_dims() -> (usize, usize) {
+    (crate::pbs::PUB_STATE_DIM, crate::pbs::PBS_DIM)
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGame>()?;
     m.add_class::<PyVecEnv>()?;
     m.add_class::<PyRollouts>()?;
     m.add_class::<PyFastNet>()?;
+    m.add_class::<PyPubBelief>()?;
+    m.add_class::<PyPbsVecEnv>()?;
     m.add_function(wrap_pyfunction!(dims, m)?)?;
+    m.add_function(wrap_pyfunction!(pbs_dims, m)?)?;
     m.add_function(wrap_pyfunction!(hidden_dim, m)?)?;
     m.add_function(wrap_pyfunction!(classify_cards, m)?)?;
     m.add_function(wrap_pyfunction!(card_label, m)?)?;

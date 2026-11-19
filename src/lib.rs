@@ -7,6 +7,7 @@ pub mod fastnet;
 pub mod features;
 pub mod game;
 pub mod moves;
+pub mod pbs;
 pub mod search;
 pub mod venv;
 
