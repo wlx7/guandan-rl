@@ -199,7 +199,7 @@ impl Net {
             .and_then(|c| c.get("hist_len").and_then(|v| v.as_u64()))
             .map_or(24, |n| (n as usize).clamp(1, HIST_LEN));
         let b_lstm: Vec<f32> = bih.iter().zip(bhh).map(|(a, b)| a + b).collect();
-        let fast = guandan_core::fastnet::FastNet::new(
+        let mut fast = guandan_core::fastnet::FastNet::new(
             l,
             hist_len,
             wih.clone(),
@@ -209,6 +209,29 @@ impl Net {
             head.iter().map(|x| (x.w.clone(), x.b.clone(), x.n_out, x.n_in)).collect(),
             belief.as_ref().map(|x| (x.w.clone(), x.b.clone(), x.n_out, x.n_in)),
         )?;
+        if let (
+            Some((s0, w0)), Some((_, b0)),
+            Some((_, ln0w)), Some((_, ln0b)),
+            Some((s1, w1)), Some((_, b1)),
+            Some((_, ln1w)), Some((_, ln1b)),
+            Some((s2, w2)), Some((_, b2)),
+        ) = (
+            t.get("oracle_head.fc0.weight"), t.get("oracle_head.fc0.bias"),
+            t.get("oracle_head.ln0.weight"), t.get("oracle_head.ln0.bias"),
+            t.get("oracle_head.fc1.weight"), t.get("oracle_head.fc1.bias"),
+            t.get("oracle_head.ln1.weight"), t.get("oracle_head.ln1.bias"),
+            t.get("oracle_head.fc2.weight"), t.get("oracle_head.fc2.bias"),
+        ) {
+            if s0.len() == 2 && s1.len() == 2 && s2.len() == 2 {
+                let _ = fast.set_oracle(
+                    (w0.clone(), b0.clone(), s0[0], s0[1]),
+                    (ln0w.clone(), ln0b.clone()),
+                    (w1.clone(), b1.clone(), s1[0], s1[1]),
+                    (ln1w.clone(), ln1b.clone()),
+                    (w2.clone(), b2.clone(), s2[0], s2[1]),
+                );
+            }
+        }
         Ok(Net {
             l,
             w_ih: Lin::new(wih.clone(), vec![0.0; 4 * l], 4 * l, HIST_DIM),

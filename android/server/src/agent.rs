@@ -41,7 +41,7 @@ fn endgame_cfg(deep: bool) -> EndgameCfg {
     if deep {
         EndgameCfg { cards: 30, worlds: 32, max_nodes: 250_000, prior: 0.25, max_cands: 12, q_gap: 1.0, threads, ..EndgameCfg::default() }
     } else {
-        EndgameCfg { cards: 26, worlds: 24, max_nodes: 250_000, prior: 0.25, max_cands: 12, q_gap: 1.2, threads, ..EndgameCfg::default() }
+        EndgameCfg { cards: 28, worlds: 28, max_nodes: 250_000, prior: 0.25, max_cands: 12, q_gap: 1.2, threads, ..EndgameCfg::default() }
     }
 }
 
@@ -71,24 +71,36 @@ pub fn choose(net: &Net, g: &Game, deep: bool) -> Move {
                 return moves[i].clone();
             }
         } else {
+            let has_ora = net.fast.has_oracle();
             let ro_cfg = RolloutCfg {
                 min_cards: cfg.cards + 1,
-                max_cards: 56,
-                worlds: if deep { 16 } else { 12 },
-                top_k: if deep { 4 } else { 3 },
-                close_gap: if deep { 0.10 } else { 0.08 },
+                max_cards: if has_ora { 108 } else { 56 },
+                early_cards: 56,
+                early_close_gap: if deep { 0.09 } else { 0.08 },
+                worlds: if cl > 56 {
+                    if deep { 18 } else { 14 }
+                } else if deep {
+                    20
+                } else {
+                    16
+                },
+                top_k: if cl > 56 { 3 } else { 4 },
+                close_gap: if deep { 0.12 } else { 0.10 },
                 max_cand_gap: 0.45,
                 prior: 0.35,
-                margin_se: 0.75,
+                margin_se: if cl > 56 { 0.85 } else { 0.75 },
                 floor: cfg.floor,
                 bomb_gamma: 0.25,
-                solver_leaf_cards: 18,
+                solver_leaf_cards: 20,
+                early_oracle_plies: 12,
+                early_oracle_blend: 1.0,
                 search_return: true,
                 return_gap: if deep { 0.25 } else { 0.20 },
                 return_top_k: 4,
-                smc_oversample: 1,
+                smc_oversample: 2,
                 smc_last_k: 6,
                 threads: cfg.threads,
+                ..RolloutCfg::default()
             };
             if let Some(i) = net.fast.rollout_choose(g, best, &q_levels, logits.as_deref(), &ro_cfg, rand::random::<u64>()) {
                 return moves[i].clone();

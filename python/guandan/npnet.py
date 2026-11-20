@@ -38,6 +38,12 @@ class NumpyNet:
         self.state_mlp = self._linears(f, "state_mlp")
         self.head = self._linears(f, "head")
         self.belief = (f["belief.weight"].T.copy(), f["belief.bias"]) if "belief.weight" in f else None
+        self.oracle_head = None
+        if "oracle_head.fc0.weight" in f:
+            self.oracle_head = {
+                k[len("oracle_head."):]: f[k]
+                for k in f if k.startswith("oracle_head.")
+            }
 
     @staticmethod
     def _lin_in(f, prefix):

@@ -1201,6 +1201,29 @@ impl Solver {
         }
     }
 
+    /// Solve only the subset `cands` (indices into `moves`), returning `cands.len()` values in levels.
+    pub fn solve_subset(&mut self, g: &Game, moves: &[Move], cands: &[usize], max_nodes: u64) -> Option<Vec<f32>> {
+        let sf = EState::compute_sf_mask(g);
+        let root = EState::from_game_with_sf(g, &sf);
+        let me_team = team(root.current);
+        let (min_b, max_b) = root.tight_bounds();
+        self.reset_for_world(sf, max_nodes);
+        let mut out = Vec::with_capacity(cands.len());
+        for &mi in cands {
+            let em = EMove::from_move(&moves[mi]);
+            let mut c = root;
+            let v = match c.play_emove(&em, &self.sf) {
+                Some(r) => r,
+                None => self.value_depth(c, min_b, max_b, 0),
+            };
+            if self.aborted {
+                return None;
+            }
+            out.push(if me_team == 0 { v as f32 } else { -(v as f32) });
+        }
+        Some(out)
+    }
+
     fn solve_world(&mut self, g: &Game, moves: &[EMove], order: &[usize], max_nodes: u64) -> Option<Vec<f32>> {
         let sf = EState::compute_sf_mask(g);
         let root = EState::from_game_with_sf(g, &sf);
@@ -1398,30 +1421,81 @@ pub fn endgame_choose_full(
         raw_worlds
     };
 
-    let threads = cfg.threads.max(1).min(worlds.len());
-    let chunk = worlds.len().div_ceil(threads);
-    let results: Vec<Option<Vec<f32>>> = std::thread::scope(|s| {
-        let handles: Vec<_> = worlds
-            .chunks(chunk)
-            .map(|ws| {
-                let emv = &emoves;
-                let ord = &eval_order;
-                let max_n = cfg.max_nodes;
-                s.spawn(move || {
-                    let mut solver = Solver::new(max_n);
-                    ws.iter().map(|w| solver.solve_world(w, emv, ord, max_n)).collect::<Vec<_>>()
+    let pr = if ql.is_some() { cfg.prior.clamp(0.0, 0.95) as f64 } else { 0.0 };
+    let run_batch = |ws: &[Game], ord: &[usize]| -> Vec<Option<Vec<f32>>> {
+        if ws.is_empty() {
+            return vec![];
+        }
+        let th = cfg.threads.max(1).min(ws.len());
+        let ch = ws.len().div_ceil(th);
+        std::thread::scope(|s| {
+            let handles: Vec<_> = ws
+                .chunks(ch)
+                .map(|sub_ws| {
+                    let emv = &emoves;
+                    let max_n = cfg.max_nodes;
+                    s.spawn(move || {
+                        let mut solver = Solver::new(max_n);
+                        sub_ws.iter().map(|w| solver.solve_world(w, emv, ord, max_n)).collect::<Vec<_>>()
+                    })
                 })
-            })
-            .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-    });
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        })
+    };
+
+    // Two-stage Sequential Halving when many root candidates exist (`> 5` cands and `>= 18` worlds):
+    // Stage 1 evaluates all candidates on the first 1/3 of worlds, retains `net_choice` + top 4
+    // contenders, and Stage 2 evaluates those finalists across the remaining 2/3 of worlds.
+    let (results, final_mask) = if eval_order.len() > 5 && worlds.len() >= 18 {
+        let w1 = (worlds.len() / 3).max(6);
+        let mut res1 = run_batch(&worlds[..w1], &eval_order);
+        let mut sum1 = vec![0f64; n_mv];
+        let mut n1 = 0usize;
+        for vals in res1.iter().flatten() {
+            for &k in &eval_order {
+                sum1[k] += vals[k] as f64;
+            }
+            n1 += 1;
+        }
+        if n1 >= 4 {
+            let mut alts: Vec<(f64, usize)> = eval_order
+                .iter()
+                .copied()
+                .filter(|&k| k != net_choice)
+                .map(|k| {
+                    let pimc = sum1[k] / (n1 as f64);
+                    let sc = if let Some(q) = ql { (1.0 - pr) * pimc + pr * (q[k] as f64) } else { pimc };
+                    (sc, k)
+                })
+                .collect();
+            alts.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            let mut ord2 = Vec::with_capacity(5);
+            let mut m2 = vec![false; n_mv];
+            ord2.push(net_choice);
+            m2[net_choice] = true;
+            for &(_, k) in alts.iter().take(4) {
+                ord2.push(k);
+                m2[k] = true;
+            }
+            let res2 = run_batch(&worlds[w1..], &ord2);
+            res1.extend(res2);
+            (res1, m2)
+        } else {
+            let res2 = run_batch(&worlds[w1..], &eval_order);
+            res1.extend(res2);
+            (res1, mask)
+        }
+    } else {
+        (run_batch(&worlds, &eval_order), mask)
+    };
 
     let mut sum = vec![0f64; n_mv];
     let mut n = 0usize;
     for r in &results {
         if let Some(vals) = r {
             for k in 0..n_mv {
-                if mask[k] {
+                if final_mask[k] {
                     sum[k] += vals[k] as f64;
                 }
             }
@@ -1432,7 +1506,6 @@ pub fn endgame_choose_full(
         return None;
     }
 
-    let pr = if ql.is_some() { cfg.prior.clamp(0.0, 0.95) as f64 } else { 0.0 };
     let score_of = |k: usize| -> f64 {
         let pimc = sum[k] / n as f64;
         if let Some(q) = ql {
@@ -1445,7 +1518,7 @@ pub fn endgame_choose_full(
     let mut best = net_choice;
     let mut best_sc = score_of(net_choice);
     for k in 0..n_mv {
-        if !mask[k] || k == net_choice {
+        if !final_mask[k] || k == net_choice {
             continue;
         }
         let sc = score_of(k);

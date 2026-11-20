@@ -108,9 +108,16 @@ def choose_from_q(q, off, epsilon=0.0, rng: np.random.Generator | None = None, t
 # 2. Endgame search (`cards_left <= cards`): full 324 belief logits + Sinkhorn IPF + 2-copy Bayes +
 #    cross-suit bomb correlation (`bomb_gamma`) + root-cached SMC action-likelihood filtering
 #    (`smc_oversample x worlds`, last `smc_last_k` plays) + exact alpha-beta minimax blended with Q.
+# Full-stage belief-calibrated search settings (v1.15+):
+# 1. Opening & early-midgame (`57..108` cards): 12-ply explicit tactical playout backed by
+#    symmetrized 4-hand level-invariant `OracleValueHead` leaf evaluation + 2x SMC filtering.
+# 2. Late-midgame (`29..56` cards) & `Phase::Return`: pure-Rust incremental-LSTM rollout +
+#    20-card exact `Solver` leaf cutoff + Two-Stage Sequential Halving + 2x SMC filtering.
+# 3. Endgame (`<= 28` cards): 28-world Two-Stage Sequential Halving + 2x SMC + bomb-clustered
+#    Sinkhorn posterior + exact alpha-beta minimax blended with Q.
 ENDGAME_FAST = {
-    "cards": 26,
-    "worlds": 24,
+    "cards": 28,
+    "worlds": 28,
     "floor": 0.02,
     "bomb_gamma": 0.25,
     "max_nodes": 250_000,
@@ -120,12 +127,23 @@ ENDGAME_FAST = {
     "smc_oversample": 2,
     "smc_last_k": 6,
     "mid_rollout": True,
-    "mid_worlds": 16,
-    "mid_top_k": 3,
-    "mid_close_gap": 0.08,
+    "mid_max_cards": 108,
+    "early_cards": 56,
+    "early_close_gap": 0.08,
+    "early_worlds": 16,
+    "early_top_k": 3,
+    "early_prior": 0.35,
+    "early_margin_se": 0.85,
+    "early_smc": 2,
+    "early_oracle_plies": 12,
+    "early_oracle_blend": 1.0,
+    "mid_worlds": 20,
+    "mid_top_k": 4,
+    "mid_close_gap": 0.10,
     "mid_prior": 0.35,
     "mid_margin_se": 0.75,
-    "solver_leaf_cards": 18,
+    "mid_smc": 2,
+    "solver_leaf_cards": 20,
     "search_return": True,
     "return_gap": 0.20,
 }
@@ -141,15 +159,40 @@ ENDGAME_DEEP = {
     "smc_oversample": 2,
     "smc_last_k": 6,
     "mid_rollout": True,
-    "mid_worlds": 20,
+    "mid_max_cards": 108,
+    "early_cards": 56,
+    "early_close_gap": 0.09,
+    "early_worlds": 20,
+    "early_top_k": 4,
+    "early_prior": 0.35,
+    "early_margin_se": 0.85,
+    "early_smc": 2,
+    "early_oracle_plies": 12,
+    "early_oracle_blend": 1.0,
+    "mid_worlds": 24,
     "mid_top_k": 4,
-    "mid_close_gap": 0.10,
+    "mid_close_gap": 0.12,
     "mid_prior": 0.35,
     "mid_margin_se": 0.75,
-    "solver_leaf_cards": 18,
+    "mid_smc": 2,
+    "solver_leaf_cards": 20,
     "search_return": True,
     "return_gap": 0.25,
 }
+
+
+def _attach_oracle_dict(fnet: "_core.FastNet", od: dict):
+    def lin(p):
+        w = np.ascontiguousarray(od[p + ".weight"], dtype=np.float32)
+        b = np.ascontiguousarray(od[p + ".bias"], dtype=np.float32)
+        return (w.ravel().tolist(), b.ravel().tolist(), int(w.shape[0]), int(w.shape[1]))
+
+    def ln(p):
+        w = np.ascontiguousarray(od[p + ".weight"], dtype=np.float32)
+        b = np.ascontiguousarray(od[p + ".bias"], dtype=np.float32)
+        return (w.ravel().tolist(), b.ravel().tolist())
+
+    fnet.set_oracle(lin("fc0"), ln("ln0"), lin("fc1"), ln("ln1"), lin("fc2"))
 
 
 def build_fastnet(model) -> "_core.FastNet | None":
@@ -188,8 +231,12 @@ def build_fastnet(model) -> "_core.FastNet | None":
                 bw = arr("belief.weight")
                 bb = arr("belief.bias")
                 belief = (bw.ravel().tolist(), bb.ravel().tolist(), int(bw.shape[0]), int(bw.shape[1]))
-            return _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
+            fnet = _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
                                  b_lstm.ravel().tolist(), s_mlp, head, belief)
+            if "oracle_head.fc0.weight" in sd:
+                od = {k[len("oracle_head."):]: arr(k) for k in sd if k.startswith("oracle_head.")}
+                _attach_oracle_dict(fnet, od)
+            return fnet
 
         # NumpyNet path (weights stored transposed as [n_in, n_out])
         cfg = getattr(model, "cfg", {})
@@ -212,8 +259,11 @@ def build_fastnet(model) -> "_core.FastNet | None":
             bw = np.ascontiguousarray(bwt.T, np.float32)
             belief = (bw.ravel().tolist(), np.ascontiguousarray(bb, np.float32).ravel().tolist(),
                       int(bw.shape[0]), int(bw.shape[1]))
-        return _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
+        fnet = _core.FastNet(l, hist_len, w_ih.ravel().tolist(), w_hh.ravel().tolist(),
                              b_lstm.ravel().tolist(), s_mlp, head, belief)
+        if getattr(model, "oracle_head", None) is not None:
+            _attach_oracle_dict(fnet, model.oracle_head)
+        return fnet
     except Exception:
         return None
 
@@ -296,8 +346,10 @@ class GameAgent:
         ph = game.phase
         cl = game.cards_left()
         in_eg = bool(eg and ph == 1 and cl <= eg["cards"])
+        early_c = eg.get("early_cards", 56) if eg else 56
+        max_mid_c = (eg.get("mid_max_cards", 56) if (self.fastnet is not None and self.fastnet.has_oracle()) else early_c) if eg else 56
         in_mid = bool(eg and not in_eg and self.fastnet is not None and eg.get("mid_rollout", False)
-                      and (ph == 0 or (ph == 1 and cl <= eg.get("mid_max_cards", 56))))
+                      and (ph == 0 or (ph == 1 and cl <= max_mid_c)))
         moves, q, lg = self._forward(game, want_belief=(in_eg or in_mid))
         if not len(moves):
             return (0, 0, [])
@@ -349,8 +401,9 @@ class GameAgent:
                     if i is not None:
                         return moves[i]
                 elif in_mid:
+                    is_open = (ph == 1 and cl > early_c)
                     sec_q = float(np.partition(q, -2)[-2]) * 3.0
-                    gap_lim = eg.get("return_gap", 0.20) if ph == 0 else eg.get("mid_close_gap", 0.08)
+                    gap_lim = eg.get("return_gap", 0.20) if ph == 0 else (eg.get("early_close_gap", 0.08) if is_open else eg.get("mid_close_gap", 0.08))
                     if float(q[net]) * 3.0 - sec_q <= gap_lim:
                         i = self.fastnet.rollout_choose(
                             game,
@@ -358,23 +411,29 @@ class GameAgent:
                             ql,
                             lg,
                             min_cards=eg["cards"] + 1,
-                            max_cards=eg.get("mid_max_cards", 56),
-                            worlds=eg.get("mid_worlds", 16),
-                            top_k=eg.get("mid_top_k", 3),
+                            max_cards=max_mid_c,
+                            worlds=eg.get("early_worlds", 16) if is_open else eg.get("mid_worlds", 16),
+                            top_k=eg.get("early_top_k", 3) if is_open else eg.get("mid_top_k", 3),
                             close_gap=eg.get("mid_close_gap", 0.08),
                             max_cand_gap=eg.get("mid_max_cand_gap", 0.45),
-                            prior=eg.get("mid_prior", 0.35),
-                            margin_se=eg.get("mid_margin_se", 0.75),
+                            prior=eg.get("early_prior", 0.35) if is_open else eg.get("mid_prior", 0.35),
+                            margin_se=eg.get("early_margin_se", 0.85) if is_open else eg.get("mid_margin_se", 0.75),
                             floor=eg.get("floor", 0.02),
                             bomb_gamma=eg.get("bomb_gamma", 0.25),
                             solver_leaf_cards=eg.get("solver_leaf_cards", 18),
                             search_return=eg.get("search_return", True),
                             return_gap=eg.get("return_gap", 0.20),
                             return_top_k=eg.get("return_top_k", 4),
-                            smc_oversample=1,
-                            smc_last_k=6,
+                            smc_oversample=eg.get("early_smc", 2) if is_open else eg.get("mid_smc", 1),
+                            smc_last_k=eg.get("smc_last_k", 6),
                             threads=th,
                             seed=random.getrandbits(63),
+                            early_cards=early_c,
+                            early_close_gap=eg.get("early_close_gap", 0.08),
+                            oracle_plies=eg.get("oracle_plies", 0),
+                            oracle_blend=eg.get("oracle_blend", 0.0),
+                            early_oracle_plies=eg.get("early_oracle_plies", 12),
+                            early_oracle_blend=eg.get("early_oracle_blend", 1.0),
                         )
                         if i is not None:
                             return moves[i]

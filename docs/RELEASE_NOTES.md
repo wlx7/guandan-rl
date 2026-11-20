@@ -18,6 +18,19 @@
 
 Linux / macOS：下载对应平台的 `.whl`，`pip install torch guandan_rl-*.whl`，然后运行 `guandan serve`。
 
+### v1.15.0
+
+- **覆盖整局 108 张牌的全阶段搜索引擎（开局四手全信息残差子博弈 + 二阶段减半残局与中盘提速）**：在保持 211 亿样本主干网络（`lstm` / `state_mlp` / `head` / `belief` 全部 20 个权重张量逐字节零改动）的前提下，将在线搜索推进到此前完全空白的**开局与前中盘（57～108 张，占整局超 52% 的决策）**，并同步加深中盘与残局搜索：
+  - **级牌与逢人配对齐的四手全信息残差估值头（`OracleValueHead`）+ 12 步开局子博弈搜索**：传统截断搜索在开局失败（输 1.5 级/局），是因为单手不完全信息 `Q` 在截断处看不到其余三家底牌交互且存在跨座位偏差，而跑满 60 步到底的单世界方差又高达 `SD = 1.65` 级。v1.15.0 在冻结的 211 亿主干上训练了一个级牌与逢人配对齐的四手全信息残差估值头（`OracleValueHead`，读取其余三家的 15 桶级牌对齐 `strength_thermo`、逢人配张数及炸弹/控牌统计，经 1,000 万帧自对弈训练并融合最后 4 个快照为 Model Soup，未见验证集 MSE 从 `2.3893` 降至 **`1.6235`，大幅削减 `-32.05%`**），在 `57～108` 张的胶着决策（前两名估值差 ≤ 0.08 级）经 `2×16 → 16` 世界 SMC 历史似然重采样后向前推演 12 步，并用第 12、13 步异队成对对称的 `OracleValueHead` 叶估值收尾（彻底消除跨座位乐观偏差；96 世界真值标尺下单世界方差降低 **4.5 倍**，显著分差局面方向准确率从全推演的 31.6% 跃升至 **78.9%**）。
+  - **二阶段 Sequential Halving 候选减半 + 中盘与残局同步加深**：在残局与中盘推演中引入两阶段候选减半（先在前半数世界筛出 `net_choice` 与最优挑战者，再在剩余世界集中评估），并将中盘全阶段开启 `2×` SMC 似然过滤、精确求解收尾从 18 张推前到 **20 张**（`20` 世界，`top_k = 4 → 3`），默认残局搜索从“26 张、24 世界”推前到 **“28 张、28 世界”**（深度模式 30 张、32 世界）。
+- **独立未见牌局最终验收（从未参与研发筛选的全新种子）**：
+  - 直接对打 **v1.14.0 默认 AI**：4,000 副未见复式牌（8,000 局，`--seed 20264001..20264004, 20264031..20264034`）每局再多赢 **+0.053 ± 0.016 级**（**3.41 倍标准误**，单局头游胜率 **51.21% ± 0.38%，3.15 倍标准误**；其中首轮 2,000 副为 **+0.062 ± 0.022 级**、胜率 **51.52%**）；
+  - 直接对打 **v1.14.0 默认 AI 完整竞技赛**：300 场从 2 打过 A、含进还贡的完整比赛（3,511 局，`--seed 20264010`）赢 **162 / 300 场（54.00% ± 2.34%，小局胜率 52.09%）**；
+  - 对不搜索的随包纯网络（v1.12.0）：2,000 副未见复式牌（4,000 局，`--seed 20264021..20264024`）每局多赢 **+0.226 ± 0.022 级**（**10.51 倍标准误**，单局胜率 **52.95% ± 0.53%**）。
+- 纯 Rust `FastNet` 实现 `LayerNorm + GELU` 与级牌对齐特征提取（跨全部 13 个级牌与 PyTorch 最大误差仅 `3.16e-6` 级）；电脑版、Windows 免安装版、安卓 App 同步升级（随包模型含 `fp16` 残差估值头共 13 MB，旧版无该头的模型仍 100% 兼容）。
+
+**English.** Extending online search across all 108 cards of a Guandan round while keeping all 20 tensors of the 21.1B-sample backbone bit-for-bit unchanged: (1) **12-ply opening & early-midgame (`57..108` cards) subgame search backed by a level- & wild-aligned 4-hand residual value head (`OracleValueHead`)** trained on 10M self-play frames and averaged across 4 snapshots (cutting unseen validation MSE by **32.05%**, from 2.3893 to 1.6235; evaluated on consecutive opposing-team plies 12 & 13 to cancel cross-seat optimism bias, cutting per-world variance 4.5× and lifting sign accuracy on significant close opening decisions from 31.6% to 78.9%); (2) **Two-Stage Sequential Halving** across endgame and mid-game search, enabling 2× SMC filtering throughout the mid-game, pushing the exact minimax leaf cutoff from 18 to **20 cards** (`20` worlds), and expanding default endgame search from 26 cards / 24 worlds to **28 cards / 28 worlds**. On untouched holdout deals, v1.15.0 beats **v1.14.0** by **+0.053 ± 0.016** levels/round (**3.41σ**, 51.21% ± 0.38% round wins across 4,000 duplicate deals = 8,000 rounds; **162 / 300 = 54.0%** full tribute matches 2→A), and gains **+0.226 ± 0.022** levels/round (**10.51σ**, 52.95% round wins) over the raw v1.12.0 network.
+
 ### v1.14.0
 
 - **无需重头训练网络，在线多阶段推理引擎再破平台期**：在同一份 211 亿样本随包模型（`guandan-medium.pt`，11 MB）上，新增纯 Rust 零依赖增量推理与反事实信念重采样引擎（`src/fastnet.rs`），在 **v1.13.0 之上再次大幅提升棋力**：

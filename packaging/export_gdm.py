@@ -20,7 +20,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "python"))
 from guandan.ptload import load_pt  # noqa: E402
 
-KEEP = ("lstm.", "state_mlp.", "head.", "belief.")
+KEEP = ("lstm.", "state_mlp.", "head.", "belief.", "oracle_head.")
 
 
 def export(src, dst):

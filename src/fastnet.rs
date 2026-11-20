@@ -279,6 +279,39 @@ fn relu_inplace(x: &mut [f32]) {
     }
 }
 
+#[inline]
+fn erff_exact(x: f32) -> f32 {
+    let sign = if x < 0.0 { -1.0f32 } else { 1.0f32 };
+    let ax = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * ax);
+    let poly = (((((1.061_405_4 * t - 1.453_152) * t) + 1.421_413_7) * t - 0.284_496_74) * t + 0.254_829_6) * t;
+    sign * (1.0 - poly * (-ax * ax).exp())
+}
+
+#[inline]
+fn layernorm_gelu_inplace(x: &mut [f32], w: &[f32], b: &[f32]) {
+    let n = x.len() as f32;
+    let mean = x.iter().sum::<f32>() / n;
+    let var = x.iter().map(|&v| { let d = v - mean; d * d }).sum::<f32>() / n;
+    let inv_std = 1.0 / (var + 1e-5).sqrt();
+    let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+    for i in 0..x.len() {
+        let xn = (x[i] - mean) * inv_std * w[i] + b[i];
+        x[i] = 0.5 * xn * (1.0 + erff_exact(xn * inv_sqrt2));
+    }
+}
+
+#[derive(Clone)]
+pub struct OracleHead {
+    fc0: FastLin,
+    ln0_w: Vec<f32>,
+    ln0_b: Vec<f32>,
+    fc1: FastLin,
+    ln1_w: Vec<f32>,
+    ln1_b: Vec<f32>,
+    fc2: FastLin,
+}
+
 /// Compact representation of one history move: the seat `player` who played it, plus the
 /// non-zero indices in `0..136` (`cards108 + kind + key`, at most 14 active bits).
 /// Seat-relative index `136 + ((player + 4 - me) & 3)` is added on the fly per seat!
@@ -334,6 +367,8 @@ pub struct FastScratch {
     head_base: Vec<f32>,
     head_a: Vec<f32>,
     head_b: Vec<f32>,
+    ora_a: Vec<f32>,
+    ora_b: Vec<f32>,
     q_buf: Vec<f32>,
     h_seats: [[f32; 512]; 4], // supports up to L = 512 (xlarge)
     c_seats: [[f32; 512]; 4],
@@ -344,6 +379,10 @@ impl FastScratch {
     pub fn new(net: &FastNet) -> Self {
         let max_mlp = net.state_mlp.iter().map(|l| l.n_out).max().unwrap_or(768);
         let max_head = net.head.iter().map(|l| l.n_out).max().unwrap_or(768);
+        let (oa, ob) = match &net.oracle {
+            Some(o) => (o.fc0.n_out, o.fc1.n_out),
+            None => (0, 0),
+        };
         FastScratch {
             gates: vec![0f32; 4 * net.l],
             s_buf: [0u8; STATE_DIM],
@@ -354,6 +393,8 @@ impl FastScratch {
             head_base: vec![0f32; net.head[0].n_out],
             head_a: vec![0f32; max_head],
             head_b: vec![0f32; max_head],
+            ora_a: vec![0f32; oa],
+            ora_b: vec![0f32; ob],
             q_buf: Vec::with_capacity(128),
             h_seats: [[0f32; 512]; 4],
             c_seats: [[0f32; 512]; 4],
@@ -373,6 +414,7 @@ pub struct FastNet {
     state_mlp: Vec<FastLin>,
     head: Vec<FastLin>,
     belief: Option<FastLin>,
+    oracle: Option<OracleHead>,
 }
 
 impl FastNet {
@@ -419,7 +461,167 @@ impl FastNet {
             state_mlp: s_layers,
             head: h_layers,
             belief: b_lin,
+            oracle: None,
         })
+    }
+
+    pub fn has_oracle(&self) -> bool {
+        self.oracle.is_some()
+    }
+
+    /// Attach a 4-hand level-invariant Perfect-Information `OracleHead` (`122 + 408 + z_dim + ACTION_DIM + 1 -> h1 -> h2 -> 1`).
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub fn set_oracle(
+        &mut self,
+        fc0: (Vec<f32>, Vec<f32>, usize, usize),
+        ln0: (Vec<f32>, Vec<f32>),
+        fc1: (Vec<f32>, Vec<f32>, usize, usize),
+        ln1: (Vec<f32>, Vec<f32>),
+        fc2: (Vec<f32>, Vec<f32>, usize, usize),
+    ) -> Result<(), String> {
+        let exp_in = 122 + 408 + self.z_dim + ACTION_DIM + 1;
+        if fc0.3 != exp_in || fc1.3 != fc0.2 || fc2.3 != fc1.2 || fc2.2 != 1 {
+            return Err(format!("oracle dim mismatch: got ({}, {}, {}, {}), expected in={exp_in}", fc0.3, fc0.2, fc1.2, fc2.2));
+        }
+        if ln0.0.len() != fc0.2 || ln0.1.len() != fc0.2 || ln1.0.len() != fc1.2 || ln1.1.len() != fc1.2 {
+            return Err("oracle layernorm shape mismatch".into());
+        }
+        self.oracle = Some(OracleHead {
+            fc0: FastLin::new(fc0.0, fc0.1, fc0.2, fc0.3),
+            ln0_w: ln0.0,
+            ln0_b: ln0.1,
+            fc1: FastLin::new(fc1.0, fc1.1, fc1.2, fc1.3),
+            ln1_w: ln1.0,
+            ln1_b: ln1.1,
+            fc2: FastLin::new(fc2.0, fc2.1, fc2.2, fc2.3),
+        });
+        Ok(())
+    }
+
+    /// Evaluate 4-hand level-invariant `OracleHead` for `(g, me, chosen_mv, q_lvl)` (in level units).
+    /// Requires `sc.s_buf` and `sc.z_buf` to be populated for `(g, me)`.
+    #[inline]
+    pub fn eval_oracle(&self, g: &Game, me: u8, chosen_mv: &Move, q_lvl: f32, sc: &mut FastScratch) -> f32 {
+        let Some(ref ora) = self.oracle else {
+            return q_lvl;
+        };
+        let n0 = ora.fc0.n_out;
+        let n1 = ora.fc1.n_out;
+        sc.ora_a[..n0].copy_from_slice(&ora.fc0.b);
+
+        // 1. `[0..122]`: own `strength_thermo` (`sc.s_buf[108..230]`)
+        ora.fc0.add_bits(&sc.s_buf[108..230], 0, &mut sc.ora_a[..n0]);
+
+        // 2. `[122..530]`: RHO, Partner, LHO level-invariant `strength_thermo` (122) + `summary14` (14)
+        let lv = g.level;
+        let wt = wild_type(lv) as usize;
+        for r in 1..4u8 {
+            let p = ((me + r) & 3) as usize;
+            let base = 122 + ((r - 1) as usize) * 136;
+            let hand = &g.hands[p];
+            let mut reg15 = [0u8; 15];
+            let mut tot_c = 0u32;
+            for (t, &c) in hand.iter().enumerate() {
+                tot_c += c as u32;
+                if t != wt && c > 0 {
+                    reg15[sidx(rank_of(t as u8), lv) as usize] += c;
+                }
+            }
+            let wild = hand[wt];
+            for (i, &cnt) in reg15.iter().enumerate() {
+                for k in 0..8u8 {
+                    if cnt > k {
+                        let col = base + i * 8 + (k as usize);
+                        add_assign_slice(&mut sc.ora_a[..n0], &ora.fc0.wt[col * n0..(col + 1) * n0]);
+                    }
+                }
+            }
+            if wild >= 1 {
+                let col = base + 120;
+                add_assign_slice(&mut sc.ora_a[..n0], &ora.fc0.wt[col * n0..(col + 1) * n0]);
+            }
+            if wild >= 2 {
+                let col = base + 121;
+                add_assign_slice(&mut sc.ora_a[..n0], &ora.fc0.wt[col * n0..(col + 1) * n0]);
+            }
+            let mut nat_b4 = 0u32;
+            let mut nat_b5 = 0u32;
+            let mut max_nat = 0u8;
+            let mut wild_b5 = 0u32;
+            let mut singles = 0u32;
+            let mut pairs = 0u32;
+            let mut triples = 0u32;
+            for &c in &reg15[..13] {
+                if c > max_nat {
+                    max_nat = c;
+                }
+                if c >= 4 {
+                    nat_b4 += 1;
+                }
+                if c >= 5 {
+                    nat_b5 += 1;
+                }
+                if c + wild >= 5 {
+                    wild_b5 += 1;
+                }
+                if c == 1 {
+                    singles += 1;
+                } else if c == 2 {
+                    pairs += 1;
+                } else if c == 3 {
+                    triples += 1;
+                }
+            }
+            let max_rk_cnt = max_nat + wild;
+            let sj = reg15[13];
+            let bj = reg15[14];
+            let sum14 = [
+                if sj >= 2 && bj >= 2 { 1.0 } else { 0.0 },
+                (nat_b4 as f32) / 3.0,
+                (nat_b5 as f32) / 2.0,
+                if max_rk_cnt >= 4 { 1.0 } else { 0.0 },
+                if max_rk_cnt >= 5 { 1.0 } else { 0.0 },
+                if max_rk_cnt >= 6 { 1.0 } else { 0.0 },
+                (wild_b5.min(2) as f32) / 2.0,
+                (sj as f32) / 2.0,
+                (bj as f32) / 2.0,
+                (reg15[12] as f32) / 6.0,
+                (singles as f32) / 10.0,
+                (tot_c as f32) / 27.0,
+                (pairs as f32) / 8.0,
+                (triples as f32) / 5.0,
+            ];
+            ora.fc0.add_sparse_f32(&sum14, base + 122, &mut sc.ora_a[..n0]);
+        }
+
+        // 3. `[530 .. 530 + z_dim]`: `z`, `[.. + ACTION_DIM]`: `a`, `[last]`: `q_lvl`
+        ora.fc0.add_sparse_f32(&sc.z_buf, 530, &mut sc.ora_a[..n0]);
+        encode_action(g, me, chosen_mv, &mut sc.a_buf);
+        ora.fc0.add_bits(&sc.a_buf, 530 + self.z_dim, &mut sc.ora_a[..n0]);
+        ora.fc0.add_sparse_f32(&[q_lvl], 530 + self.z_dim + ACTION_DIM, &mut sc.ora_a[..n0]);
+
+        layernorm_gelu_inplace(&mut sc.ora_a[..n0], &ora.ln0_w, &ora.ln0_b);
+        ora.fc1.forward_dense(&sc.ora_a[..n0], &mut sc.ora_b[..n1]);
+        layernorm_gelu_inplace(&mut sc.ora_b[..n1], &ora.ln1_w, &ora.ln1_b);
+        let delta = ora.fc2.dot1(&sc.ora_b[..n1]);
+        (q_lvl + delta).clamp(-3.0, 3.0)
+    }
+
+    /// Standalone single-game `OracleHead` evaluation for testing exact parity vs PyTorch.
+    pub fn eval_oracle_standalone(&self, g: &Game, move_idx: usize) -> f32 {
+        let me = g.current;
+        let moves = g.legal_moves();
+        if move_idx >= moves.len() {
+            return 0.0;
+        }
+        let mut sc = FastScratch::new(self);
+        self.init_root_lstm(&g.history, 1 << me, &mut sc.h_seats, &mut sc.c_seats, &mut sc.gates);
+        encode_state(g, me, &mut sc.s_buf);
+        let h_me = sc.h_seats[me as usize];
+        self.state_to_z(&h_me[..self.l], &mut sc);
+        self.score_moves(g, me, &moves, &mut sc);
+        let q_lvl = sc.q_buf[move_idx] * 3.0;
+        self.eval_oracle(g, me, &moves[move_idx], q_lvl, &mut sc)
     }
 
     /// Step `(h, c)` one LSTM tick on an all-zero padding row (`x = 0`).
@@ -621,6 +823,8 @@ impl FastNet {
         root_h: &[[f32; 512]; 4],
         root_c: &[[f32; 512]; 4],
         solver_leaf_cards: u32,
+        ora_plies: u32,
+        ora_blend: f32,
         solver: &mut Option<Solver>,
         sc: &mut FastScratch,
     ) -> f32 {
@@ -642,16 +846,33 @@ impl FastNet {
             sc.hist_log.push(CompactHistMove::from_move(p0, first_move));
         }
 
-        for _ in 0..400 {
+        let use_ora = ora_plies > 0 && ora_blend > 0.0 && self.oracle.is_some();
+        let ob = ora_blend.clamp(0.0, 1.0);
+        let mut ora_sum = 0.0f32;
+        let mut ora_cnt = 0u32;
+
+        for step_idx in 0..400u32 {
             match g.phase {
-                Phase::RoundOver | Phase::MatchOver => return g.round_reward(me_team),
+                Phase::RoundOver | Phase::MatchOver => {
+                    let v_end = g.round_reward(me_team);
+                    return if ora_cnt > 0 {
+                        ob * (ora_sum / (ora_cnt as f32)) + (1.0 - ob) * v_end
+                    } else {
+                        v_end
+                    };
+                }
                 Phase::Play if solver_leaf_cards > 0 => {
                     let cl: u32 = g.hands.iter().map(hand_count).sum();
                     if cl <= solver_leaf_cards {
                         if let Some(ref mut sol) = solver {
                             if let Some(v_cur) = sol.leaf_value(&g, 60_000) {
                                 let sign = if team(g.current) == me_team { 1.0 } else { -1.0 };
-                                return v_cur * sign;
+                                let v_end = v_cur * sign;
+                                return if ora_cnt > 0 {
+                                    ob * (ora_sum / (ora_cnt as f32)) + (1.0 - ob) * v_end
+                                } else {
+                                    v_end
+                                };
                             }
                         }
                     }
@@ -663,7 +884,8 @@ impl FastNet {
             if moves.is_empty() {
                 break;
             }
-            let choice = if moves.len() == 1 {
+            let need_ora_here = use_ora && (step_idx + 1 >= ora_plies) && ora_cnt < 2 && g.phase == Phase::Play;
+            let choice = if moves.len() == 1 && !need_ora_here {
                 0usize
             } else {
                 // Lazily catch up ONLY `me`'s LSTM state to `sc.hist_log.len()`!
@@ -679,6 +901,15 @@ impl FastNet {
                 self.score_moves(&g, me, &moves, sc)
             };
             let chosen_mv = &moves[choice];
+            if need_ora_here {
+                let q_lvl = sc.q_buf[choice] * 3.0;
+                let sgn = if team(me) == me_team { 1.0 } else { -1.0 };
+                ora_sum += self.eval_oracle(&g, me, chosen_mv, q_lvl, sc) * sgn;
+                ora_cnt += 1;
+                if ora_cnt == 2 && ob >= 0.999 {
+                    return 0.5 * ora_sum;
+                }
+            }
             let rec = g.phase == Phase::Play;
             if rec {
                 sc.hist_log.push(CompactHistMove::from_move(me, chosen_mv));
@@ -687,7 +918,12 @@ impl FastNet {
                 break;
             }
         }
-        g.round_reward(me_team)
+        let v_end = g.round_reward(me_team);
+        if ora_cnt > 0 {
+            ob * (ora_sum / (ora_cnt as f32)) + (1.0 - ob) * v_end
+        } else {
+            v_end
+        }
     }
 
     /// Root-cached SMC action-likelihood log-weights for `worlds` from `me`'s perspective!
@@ -923,7 +1159,14 @@ impl FastNet {
             if cl < cfg.min_cards || cl > cfg.max_cards {
                 return None;
             }
-            cfg.close_gap
+            if cfg.early_cards > 0 && cl > cfg.early_cards {
+                if cfg.early_oracle_plies > 0 && !self.has_oracle() {
+                    return None;
+                }
+                cfg.early_close_gap
+            } else {
+                cfg.close_gap
+            }
         };
 
         // Order moves by descending Q and check if top-2 gap triggers search!
@@ -979,63 +1222,112 @@ impl FastNet {
         if nw == 0 {
             return None;
         }
-        let nc = cands.len();
-
-        // 3. Evaluate all `nw * nc` common-random-number branches in parallel across threads!
-        let total_jobs = nw * nc;
-        let threads = cfg.threads.max(1).min(total_jobs);
-        let job_indices: Vec<usize> = (0..total_jobs).collect();
-        let chunk = total_jobs.div_ceil(threads);
         let leaf_cards = cfg.solver_leaf_cards;
+        let pr = cfg.prior.clamp(0.0, 0.95) as f64;
+        let (o_plies, o_blend) = if is_play && cfg.early_cards > 0 && cl > cfg.early_cards {
+            (cfg.early_oracle_plies, cfg.early_oracle_blend)
+        } else {
+            (cfg.oracle_plies, cfg.oracle_blend)
+        };
 
-        let flat_vals: Vec<f32> = std::thread::scope(|scope| {
-            let handles: Vec<_> = job_indices
-                .chunks(chunk)
-                .map(|jobs| {
-                    let ws_ref = &worlds;
-                    let cs_ref = &cands;
-                    let mvs_ref = &moves;
-                    let rh = &root_h;
-                    let rc = &root_c;
-                    scope.spawn(move || {
-                        let mut sc = FastScratch::new(self);
-                        let mut sol = if leaf_cards > 0 { Some(Solver::new(60_000)) } else { None };
-                        let mut res = Vec::with_capacity(jobs.len());
-                        for &job in jobs {
-                            let wi = job % nw;
-                            let ci = job / nw;
-                            let mv = &mvs_ref[cs_ref[ci]];
-                            let v = self.simulate_branch(&ws_ref[wi], mv, me_team, rh, rc, leaf_cards, &mut sol, &mut sc);
-                            res.push(v);
-                        }
-                        res
+        let eval_grid = |ws_slice: &[Game], c_slice: &[usize]| -> Vec<f32> {
+            let n_w = ws_slice.len();
+            let n_c = c_slice.len();
+            let total_jobs = n_w * n_c;
+            if total_jobs == 0 {
+                return vec![];
+            }
+            let threads = cfg.threads.max(1).min(total_jobs);
+            let job_indices: Vec<usize> = (0..total_jobs).collect();
+            let chunk = total_jobs.div_ceil(threads);
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = job_indices
+                    .chunks(chunk)
+                    .map(|jobs| {
+                        let mvs_ref = &moves;
+                        let rh = &root_h;
+                        let rc = &root_c;
+                        scope.spawn(move || {
+                            let mut sc = FastScratch::new(self);
+                            let mut sol = if leaf_cards > 0 { Some(Solver::new(60_000)) } else { None };
+                            let mut res = Vec::with_capacity(jobs.len());
+                            for &job in jobs {
+                                let wi = job % n_w;
+                                let ci = job / n_w;
+                                let mv = &mvs_ref[c_slice[ci]];
+                                let v = self.simulate_branch(&ws_slice[wi], mv, me_team, rh, rc, leaf_cards, o_plies, o_blend, &mut sol, &mut sc);
+                                res.push(v);
+                            }
+                            res
+                        })
                     })
+                    .collect();
+                handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+            })
+        };
+
+        // 3. Two-stage Sequential Halving when `cands.len() >= 4` and `nw >= 14`:
+        // Stage 1 evaluates all `cands` on the first `w1 = nw / 2` worlds, retains `cands[0]`
+        // (`net_choice`) + top 2 alternatives, and Stage 2 evaluates finalists on `worlds[w1..nw]`.
+        let (final_cands, flat_vals) = if cands.len() >= 4 && nw >= 14 {
+            let w1 = nw / 2;
+            let vals1 = eval_grid(&worlds[..w1], &cands);
+            let mut alts: Vec<(f64, usize)> = (1..cands.len())
+                .map(|ci| {
+                    let m1 = vals1[ci * w1..(ci + 1) * w1].iter().map(|&x| x as f64).sum::<f64>() / (w1 as f64);
+                    let sc1 = (1.0 - pr) * m1 + pr * (q_levels[cands[ci]] as f64);
+                    (sc1, ci)
                 })
                 .collect();
-            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
-        });
+            alts.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            let mut keep_ci = Vec::with_capacity(3);
+            keep_ci.push(0usize);
+            for &(_, ci) in alts.iter().take(2) {
+                keep_ci.push(ci);
+            }
+            let fc: Vec<usize> = keep_ci.iter().map(|&ci| cands[ci]).collect();
+            let vals2 = eval_grid(&worlds[w1..], &fc);
+            let w2 = nw - w1;
+            let mut merged = Vec::with_capacity(fc.len() * nw);
+            for (new_i, &old_ci) in keep_ci.iter().enumerate() {
+                merged.extend_from_slice(&vals1[old_ci * w1..(old_ci + 1) * w1]);
+                merged.extend_from_slice(&vals2[new_i * w2..(new_i + 1) * w2]);
+            }
+            (fc, merged)
+        } else {
+            let v = eval_grid(&worlds, &cands);
+            (cands, v)
+        };
+        let nc = final_cands.len();
 
-        // 4. Aggregate paired means, SEs, and blended scores against `cands[0] == net_choice`
+        // 4. Aggregate paired means, SEs, and blended scores against `final_cands[0] == net_choice`
         let mut means = vec![0.0f64; nc];
         for ci in 0..nc {
             let slice = &flat_vals[ci * nw..(ci + 1) * nw];
             means[ci] = slice.iter().map(|&x| x as f64).sum::<f64>() / (nw as f64);
         }
-        let pr = cfg.prior.clamp(0.0, 0.95) as f64;
         let blended: Vec<f64> = (0..nc)
-            .map(|ci| (1.0 - pr) * means[ci] + pr * (q_levels[cands[ci]] as f64))
+            .map(|ci| (1.0 - pr) * means[ci] + pr * (q_levels[final_cands[ci]] as f64))
             .collect();
 
         let mut best_ci = 0usize;
         let mut best_sc = blended[0];
         let base_vals = &flat_vals[0..nw];
 
+        let min_diff = if is_play && cfg.early_cards > 0 && cl > cfg.early_cards {
+            cfg.early_margin_abs as f64
+        } else {
+            cfg.margin_abs as f64
+        };
         for ci in 1..nc {
             if blended[ci] <= best_sc + 1e-9 {
                 continue;
             }
             let cand_vals = &flat_vals[ci * nw..(ci + 1) * nw];
             let diff_mean = means[ci] - means[0];
+            if diff_mean <= min_diff {
+                continue;
+            }
             let se = if nw > 1 {
                 let var = cand_vals
                     .iter()
@@ -1057,7 +1349,294 @@ impl FastNet {
         }
 
         if best_ci != 0 {
-            Some(cands[best_ci])
+            Some(final_cands[best_ci])
+        } else {
+            None
+        }
+    }
+
+    /// Anti-Fusion Hybrid Endgame Search (`DD + IIR` Concave Envelope):
+    /// 1. Screens up to `max_cands` root moves across `worlds` SMC-filtered belief worlds via exact
+    ///    Double-Dummy alpha-beta minimax (`V_DD`, guarding against opponent tactical refutations).
+    /// 2. Selects `net_choice` + top 3 DD finalists and evaluates Imperfect-Information `FastNet`
+    ///    Rollout down to `iir_leaf_cards` (`V_IIR`, modeling realistic non-peeking partner & self
+    ///    play) on the EXACT SAME worlds!
+    /// 3. Combines `(V_DD, V_IIR)` per world via asymmetric concave envelope:
+    ///    - `V_IIR < V_DD` (Telepathy / Strategy-Fusion illusion): `(1 - iir_w_neg) * V_DD + iir_w_neg * V_IIR`
+    ///    - `V_IIR >= V_DD` (Opponent Imperfect-Info advantage):   `(1 - iir_w_pos) * V_DD + iir_w_pos * V_IIR`
+    #[allow(clippy::too_many_arguments)]
+    pub fn anti_fusion_endgame_choose(
+        &self,
+        g: &Game,
+        net_choice: usize,
+        q_levels: &[f32],
+        belief_logits: Option<&[f32]>,
+        cards: u32,
+        worlds: usize,
+        floor: f32,
+        bomb_gamma: f32,
+        max_nodes: u64,
+        margin: f32,
+        margin_se: f32,
+        prior: f32,
+        max_cands: usize,
+        q_gap: f32,
+        iir_w_neg: f32,
+        iir_w_pos: f32,
+        iir_min_cards: u32,
+        iir_leaf_cards: u32,
+        smc_oversample: usize,
+        smc_last_k: usize,
+        threads: usize,
+        seed: u64,
+    ) -> Option<usize> {
+        if g.phase != Phase::Play {
+            return None;
+        }
+        let left: u32 = g.hands.iter().map(hand_count).sum();
+        if left > cards {
+            return None;
+        }
+        let moves = g.legal_moves();
+        let n_mv = moves.len();
+        if n_mv < 2 || net_choice >= n_mv || q_levels.len() != n_mv {
+            return None;
+        }
+
+        let mut ord: Vec<usize> = (0..n_mv).collect();
+        ord.sort_unstable_by(|&a, &b| q_levels[b].partial_cmp(&q_levels[a]).unwrap_or(std::cmp::Ordering::Equal));
+        let top_q = q_levels[net_choice];
+        let limit = if max_cands > 0 { max_cands.min(n_mv) } else { n_mv };
+        let mut cands: Vec<usize> = Vec::with_capacity(limit);
+        cands.push(net_choice);
+        for &i in &ord {
+            if cands.len() >= limit {
+                break;
+            }
+            if i != net_choice && (q_gap <= 0.0 || top_q - q_levels[i] <= q_gap) {
+                cands.push(i);
+            }
+        }
+        if cands.len() < 2 {
+            return None;
+        }
+
+        let me = g.current;
+        let me_team = team(me);
+        let mut rng = Rng::new(seed);
+        let n_draw = worlds * smc_oversample.max(1);
+        let raw_worlds: Vec<Game> = (0..n_draw)
+            .map(|_| {
+                if let Some(lg) = belief_logits {
+                    g.determinize_belief_clustered(me, lg, floor, bomb_gamma, &mut rng)
+                } else {
+                    g.determinize(me, &mut rng)
+                }
+            })
+            .collect();
+        let ws_vec: Vec<Game> = if smc_oversample > 1 && smc_last_k > 0 && !g.history.is_empty() {
+            let logw = self.smc_log_weights(g, &raw_worlds, me, smc_last_k, 0.40, 0.04, threads);
+            Self::systematic_resample(&raw_worlds, &logw, worlds, &mut rng)
+        } else {
+            raw_worlds
+        };
+        if ws_vec.is_empty() {
+            return None;
+        }
+
+        let n_th = threads.max(1).min(ws_vec.len());
+        let chunk = ws_vec.len().div_ceil(n_th);
+        let nc = cands.len();
+
+        // Stage 1: Exact Double-Dummy solve across all `ws_vec` for `cands`
+        let dd_rows: Vec<(usize, Vec<f32>)> = std::thread::scope(|scope| {
+            let handles: Vec<_> = ws_vec
+                .chunks(chunk)
+                .enumerate()
+                .map(|(bi, sub_ws)| {
+                    let base_wi = bi * chunk;
+                    let mvs_ref = &moves;
+                    let cs_ref = &cands;
+                    scope.spawn(move || {
+                        let mut solver_dd = Solver::new(max_nodes);
+                        let mut out = Vec::with_capacity(sub_ws.len());
+                        for (off, w) in sub_ws.iter().enumerate() {
+                            if let Some(dd) = solver_dd.solve_subset(w, mvs_ref, cs_ref, max_nodes) {
+                                out.push((base_wi + off, dd));
+                            }
+                        }
+                        out
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        });
+
+        let ok = dd_rows.len();
+        if ok == 0 {
+            return None;
+        }
+
+        let pr = prior.clamp(0.0, 0.95) as f64;
+        let mut dd_sum = vec![0.0f64; nc];
+        for (_, dd) in &dd_rows {
+            for ci in 0..nc {
+                dd_sum[ci] += dd[ci] as f64;
+            }
+        }
+
+        // Select finalists: `ci = 0` (`net_choice`) + top 2 DD-blended contenders!
+        let dd_sc_0 = (1.0 - pr) * (dd_sum[0] / (ok as f64)) + pr * (q_levels[cands[0]] as f64);
+        let mut best_alt_dd_sc = f64::NEG_INFINITY;
+        let finalist_ci: Vec<usize> = if nc <= 3 {
+            for ci in 1..nc {
+                let sc = (1.0 - pr) * (dd_sum[ci] / (ok as f64)) + pr * (q_levels[cands[ci]] as f64);
+                if sc > best_alt_dd_sc {
+                    best_alt_dd_sc = sc;
+                }
+            }
+            (0..nc).collect()
+        } else {
+            let mut alts: Vec<(f64, usize)> = (1..nc)
+                .map(|ci| {
+                    let m_dd = dd_sum[ci] / (ok as f64);
+                    let sc = (1.0 - pr) * m_dd + pr * (q_levels[cands[ci]] as f64);
+                    (sc, ci)
+                })
+                .collect();
+            alts.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            best_alt_dd_sc = alts[0].0;
+            let mut fc = Vec::with_capacity(3);
+            fc.push(0usize);
+            for &(sc, ci) in alts.iter().take(2) {
+                if sc >= best_alt_dd_sc - 0.65 || fc.len() < 2 {
+                    fc.push(ci);
+                }
+            }
+            fc
+        };
+        let nf = finalist_ci.len();
+
+        // Stage 2: Imperfect-Information `FastNet` Rollout (`V_IIR`) on the EXACT SAME `ok` solved worlds
+        // for the `nf <= 3` finalists when `left >= iir_min_cards` AND the decision is contested
+        // (either a DD contender challenges `net_choice` within `0.20` lvl, or top-2 Q gap `<= 0.20`)!
+        let w_neg = iir_w_neg.clamp(0.0, 1.0);
+        let w_pos = iir_w_pos.clamp(0.0, 1.0);
+        let q_contested = q_levels[ord[0]] - q_levels[ord[1]] <= 0.20;
+        let dd_contested = best_alt_dd_sc >= dd_sc_0 - 0.20;
+        let use_iir = (w_neg > 0.0 || w_pos > 0.0) && left >= iir_min_cards && (dd_contested || q_contested);
+
+        // `final_vals[fi * ok + ri]` stores per-world score for finalist `fi` on solved world `ri`
+        let final_vals: Vec<f32> = if use_iir {
+            let mut root_h = [[0f32; 512]; 4];
+            let mut root_c = [[0f32; 512]; 4];
+            let mut gates = vec![0f32; 4 * self.l];
+            self.init_root_lstm(&g.history, 0b1111, &mut root_h, &mut root_c, &mut gates);
+
+            let total_jobs = ok * nf;
+            let th2 = threads.max(1).min(total_jobs);
+            let ch2 = total_jobs.div_ceil(th2);
+            let job_ids: Vec<usize> = (0..total_jobs).collect();
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = job_ids
+                    .chunks(ch2)
+                    .map(|jobs| {
+                        let mvs_ref = &moves;
+                        let cs_ref = &cands;
+                        let fc_ref = &finalist_ci;
+                        let ddr_ref = &dd_rows;
+                        let ws_ref = &ws_vec;
+                        let rh = &root_h;
+                        let rc = &root_c;
+                        scope.spawn(move || {
+                            let mut sc = FastScratch::new(self);
+                            let mut sol_leaf = if iir_leaf_cards > 0 {
+                                Some(Solver::new(60_000))
+                            } else {
+                                None
+                            };
+                            let mut out = Vec::with_capacity(jobs.len());
+                            for &job in jobs {
+                                let ri = job % ok;
+                                let fi = job / ok;
+                                let (wi, ref dd_vec) = ddr_ref[ri];
+                                let ci = fc_ref[fi];
+                                let v_dd = dd_vec[ci];
+                                let v_iir = self.simulate_branch(
+                                    &ws_ref[wi],
+                                    &mvs_ref[cs_ref[ci]],
+                                    me_team,
+                                    rh,
+                                    rc,
+                                    iir_leaf_cards,
+                                    0,
+                                    0.0,
+                                    &mut sol_leaf,
+                                    &mut sc,
+                                );
+                                let w = if v_iir < v_dd { w_neg } else { w_pos };
+                                out.push((1.0 - w) * v_dd + w * v_iir);
+                            }
+                            out
+                        })
+                    })
+                    .collect();
+                handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+            })
+        } else {
+            let mut out = Vec::with_capacity(ok * nf);
+            for &ci in &finalist_ci {
+                for (_, dd_vec) in &dd_rows {
+                    out.push(dd_vec[ci]);
+                }
+            }
+            out
+        };
+
+        let mut means = vec![0.0f64; nf];
+        for fi in 0..nf {
+            let sl = &final_vals[fi * ok..(fi + 1) * ok];
+            means[fi] = sl.iter().map(|&x| x as f64).sum::<f64>() / (ok as f64);
+        }
+        let sc_of = |fi: usize| -> f64 {
+            (1.0 - pr) * means[fi] + pr * (q_levels[cands[finalist_ci[fi]]] as f64)
+        };
+        let base_sc = sc_of(0);
+        let base_sl = &final_vals[0..ok];
+        let mut best_fi = 0usize;
+        let mut best_sc = base_sc;
+
+        for fi in 1..nf {
+            let sc = sc_of(fi);
+            if sc <= best_sc + 1e-9 {
+                continue;
+            }
+            let diff_mean = means[fi] - means[0];
+            if diff_mean <= 1e-9 {
+                continue;
+            }
+            if margin_se > 0.0 && ok > 1 {
+                let cand_sl = &final_vals[fi * ok..(fi + 1) * ok];
+                let var = cand_sl
+                    .iter()
+                    .zip(base_sl.iter())
+                    .map(|(&a, &b)| {
+                        let d = (a - b) as f64 - diff_mean;
+                        d * d
+                    })
+                    .sum::<f64>()
+                    / ((ok - 1) as f64);
+                let se = (var / (ok as f64)).sqrt();
+                if diff_mean <= (margin_se as f64) * se {
+                    continue;
+                }
+            }
+            best_sc = sc;
+            best_fi = fi;
+        }
+
+        if best_fi != 0 && best_sc - base_sc > (margin as f64) + 1e-9 {
+            Some(cands[finalist_ci[best_fi]])
         } else {
             None
         }
@@ -1068,15 +1647,23 @@ impl FastNet {
 pub struct RolloutCfg {
     pub min_cards: u32,
     pub max_cards: u32,
+    pub early_cards: u32,
+    pub early_close_gap: f32,
     pub worlds: usize,
     pub top_k: usize,
     pub close_gap: f32,
     pub max_cand_gap: f32,
     pub prior: f32,
     pub margin_se: f32,
+    pub margin_abs: f32,
+    pub early_margin_abs: f32,
     pub floor: f32,
     pub bomb_gamma: f32,
     pub solver_leaf_cards: u32,
+    pub oracle_plies: u32,
+    pub oracle_blend: f32,
+    pub early_oracle_plies: u32,
+    pub early_oracle_blend: f32,
     pub search_return: bool,
     pub return_gap: f32,
     pub return_top_k: usize,
@@ -1090,15 +1677,23 @@ impl Default for RolloutCfg {
         RolloutCfg {
             min_cards: 27,
             max_cards: 56,
+            early_cards: 56,
+            early_close_gap: 0.06,
             worlds: 16,
             top_k: 3,
             close_gap: 0.08,
             max_cand_gap: 0.45,
             prior: 0.35,
             margin_se: 0.75,
+            margin_abs: 0.0,
+            early_margin_abs: 0.0,
             floor: 0.02,
             bomb_gamma: 0.0,
             solver_leaf_cards: 0,
+            oracle_plies: 0,
+            oracle_blend: 0.0,
+            early_oracle_plies: 0,
+            early_oracle_blend: 0.0,
             search_return: true,
             return_gap: 0.20,
             return_top_k: 4,

@@ -64,7 +64,9 @@ def test_fastnet_matches_torch_and_numpy():
     fn_t = build_fastnet(tm)
     fn_n = build_fastnet(nm)
     assert fn_t is not None and fn_n is not None
+    assert fn_t.has_oracle() and fn_n.has_oracle()
     g = _core.Game(42)
+    assert abs(fn_t.eval_oracle_game(g, 0) - fn_n.eval_oracle_game(g, 0)) < 1e-6
     for step in range(30):
         if g.phase not in (0, 1):
             break

@@ -23,11 +23,15 @@ _seed = itertools.count(1)
 
 
 class EndgameSearch:
-    def __init__(self, model, device="cpu", cards=26, worlds=24, guided=0.02, max_nodes=250_000,
+    def __init__(self, model, device="cpu", cards=28, worlds=28, guided=0.02, max_nodes=250_000,
                  threads=8, margin=0.0, prior=0.25, max_cands=12, q_gap=1.2,
                  bomb_gamma=0.25, smc_oversample=2, smc_last_k=6,
-                 mid_rollout=False, mid_worlds=16, mid_top_k=3, mid_close_gap=0.08,
-                 mid_prior=0.35, mid_margin_se=0.75, solver_leaf_cards=18,
+                 mid_rollout=False, mid_max_cards=108, early_cards=56, early_close_gap=0.08,
+                 early_worlds=16, early_top_k=3, early_prior=0.35, early_margin_se=0.85,
+                 early_smc=2, early_oracle_plies=12, early_oracle_blend=1.0,
+                 mid_worlds=20, mid_top_k=4, mid_close_gap=0.10,
+                 mid_prior=0.35, mid_margin_se=0.75, mid_smc=2,
+                 oracle_plies=0, oracle_blend=0.0, solver_leaf_cards=20,
                  search_return=True, return_gap=0.20):
         self.model = model
         self.device = torch.device(device)
@@ -43,11 +47,24 @@ class EndgameSearch:
         self.smc_oversample = smc_oversample
         self.smc_last_k = smc_last_k
         self.mid_rollout = mid_rollout
+        self.mid_max_cards = mid_max_cards
+        self.early_cards = early_cards
+        self.early_close_gap = early_close_gap
+        self.early_worlds = early_worlds
+        self.early_top_k = early_top_k
+        self.early_prior = early_prior
+        self.early_margin_se = early_margin_se
+        self.early_smc = early_smc
+        self.early_oracle_plies = early_oracle_plies
+        self.early_oracle_blend = early_oracle_blend
         self.mid_worlds = mid_worlds
         self.mid_top_k = mid_top_k
         self.mid_close_gap = mid_close_gap
         self.mid_prior = mid_prior
         self.mid_margin_se = mid_margin_se
+        self.mid_smc = mid_smc
+        self.oracle_plies = oracle_plies
+        self.oracle_blend = oracle_blend
         self.solver_leaf_cards = solver_leaf_cards
         self.search_return = search_return
         self.return_gap = return_gap
@@ -87,7 +104,8 @@ class EndgameSearch:
         if self.mid_rollout and self.fastnet is not None:
             if ph == 0 and self.search_return:
                 return True
-            if ph == 1 and self.cards < cl <= 56:
+            max_c = self.mid_max_cards if self.fastnet.has_oracle() else self.early_cards
+            if ph == 1 and self.cards < cl <= max_c:
                 return True
         return False
 
@@ -153,35 +171,43 @@ class EndgameSearch:
                     out[i] = r
                     self.stats["changed"] += 1
             elif self.mid_rollout and self.fastnet is not None and ql_sub[j] is not None:
+                is_open = (ph == 1 and cl > self.early_cards)
                 qlj = ql_sub[j]
                 top_q = qlj[int(net_choices[i])]
                 sec_q = max(v for k_idx, v in enumerate(qlj) if k_idx != int(net_choices[i]))
-                gap_lim = self.return_gap if ph == 0 else self.mid_close_gap
+                gap_lim = self.return_gap if ph == 0 else (self.early_close_gap if is_open else self.mid_close_gap)
                 if top_q - sec_q > gap_lim:
                     continue
+                max_c = self.mid_max_cards if self.fastnet.has_oracle() else self.early_cards
                 r = self.fastnet.rollout_choose(
                     g,
                     int(net_choices[i]),
                     ql_sub[j],
                     lg_sub[j],
                     min_cards=self.cards + 1,
-                    max_cards=56,
-                    worlds=self.mid_worlds,
-                    top_k=self.mid_top_k,
+                    max_cards=max_c,
+                    worlds=self.early_worlds if is_open else self.mid_worlds,
+                    top_k=self.early_top_k if is_open else self.mid_top_k,
                     close_gap=self.mid_close_gap,
                     max_cand_gap=0.45,
-                    prior=self.mid_prior,
-                    margin_se=self.mid_margin_se,
+                    prior=self.early_prior if is_open else self.mid_prior,
+                    margin_se=self.early_margin_se if is_open else self.mid_margin_se,
                     floor=self.guided or 0.02,
                     bomb_gamma=self.bomb_gamma,
                     solver_leaf_cards=self.solver_leaf_cards,
                     search_return=self.search_return,
                     return_gap=self.return_gap,
                     return_top_k=4,
-                    smc_oversample=1,
-                    smc_last_k=6,
+                    smc_oversample=self.early_smc if is_open else self.mid_smc,
+                    smc_last_k=self.smc_last_k,
                     threads=self.threads,
                     seed=next(_seed) * 7919,
+                    early_cards=self.early_cards,
+                    early_close_gap=self.early_close_gap,
+                    oracle_plies=self.oracle_plies,
+                    oracle_blend=self.oracle_blend,
+                    early_oracle_plies=self.early_oracle_plies,
+                    early_oracle_blend=self.early_oracle_blend,
                 )
                 self.stats["mid_searched"] += 1
                 if r is not None:

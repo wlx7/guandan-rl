@@ -674,7 +674,31 @@ impl PyFastNet {
         (mvs.iter().map(to_py).collect(), q, lg)
     }
 
-    #[pyo3(signature = (game, net_choice, q_levels, belief_logits = None, min_cards = 27, max_cards = 56, worlds = 16, top_k = 3, close_gap = 0.08, max_cand_gap = 0.45, prior = 0.35, margin_se = 0.75, floor = 0.02, bomb_gamma = 0.0, solver_leaf_cards = 0, search_return = true, return_gap = 0.20, return_top_k = 4, smc_oversample = 1, smc_last_k = 6, threads = 8, seed = 0))]
+    fn has_oracle(&self) -> bool {
+        self.inner.has_oracle()
+    }
+
+    #[pyo3(signature = (fc0, ln0, fc1, ln1, fc2))]
+    #[allow(clippy::type_complexity)]
+    fn set_oracle(
+        &mut self,
+        fc0: (Vec<f32>, Vec<f32>, usize, usize),
+        ln0: (Vec<f32>, Vec<f32>),
+        fc1: (Vec<f32>, Vec<f32>, usize, usize),
+        ln1: (Vec<f32>, Vec<f32>),
+        fc2: (Vec<f32>, Vec<f32>, usize, usize),
+    ) -> PyResult<()> {
+        let mut cloned = (*self.inner).clone();
+        cloned.set_oracle(fc0, ln0, fc1, ln1, fc2).map_err(PyValueError::new_err)?;
+        self.inner = std::sync::Arc::new(cloned);
+        Ok(())
+    }
+
+    fn eval_oracle_game(&self, game: &PyGame, move_idx: usize) -> f32 {
+        self.inner.eval_oracle_standalone(&game.g, move_idx)
+    }
+
+    #[pyo3(signature = (game, net_choice, q_levels, belief_logits = None, min_cards = 27, max_cards = 56, worlds = 16, top_k = 3, close_gap = 0.08, max_cand_gap = 0.45, prior = 0.35, margin_se = 0.75, floor = 0.02, bomb_gamma = 0.0, solver_leaf_cards = 0, search_return = true, return_gap = 0.20, return_top_k = 4, smc_oversample = 1, smc_last_k = 6, threads = 8, seed = 0, early_cards = 56, early_close_gap = 0.06, oracle_plies = 0, oracle_blend = 0.0, early_oracle_plies = 0, early_oracle_blend = 0.0, margin_abs = 0.0, early_margin_abs = 0.0))]
     #[allow(clippy::too_many_arguments)]
     fn rollout_choose(
         &self,
@@ -701,6 +725,14 @@ impl PyFastNet {
         smc_last_k: usize,
         threads: usize,
         seed: u64,
+        early_cards: u32,
+        early_close_gap: f32,
+        oracle_plies: u32,
+        oracle_blend: f32,
+        early_oracle_plies: u32,
+        early_oracle_blend: f32,
+        margin_abs: f32,
+        early_margin_abs: f32,
     ) -> PyResult<Option<usize>> {
         if let Some(ref lg) = belief_logits {
             if lg.len() != HIDDEN_DIM {
@@ -710,15 +742,23 @@ impl PyFastNet {
         let cfg = crate::fastnet::RolloutCfg {
             min_cards,
             max_cards,
+            early_cards,
+            early_close_gap,
             worlds,
             top_k,
             close_gap,
             max_cand_gap,
             prior,
             margin_se,
+            margin_abs,
+            early_margin_abs,
             floor,
             bomb_gamma,
             solver_leaf_cards,
+            oracle_plies,
+            oracle_blend,
+            early_oracle_plies,
+            early_oracle_blend,
             search_return,
             return_gap,
             return_top_k,

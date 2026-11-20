@@ -28,6 +28,7 @@ class ModelConfig:
     preset: str = "medium"
     belief: bool = False  # auxiliary head that predicts the other players' hands (training only)
     ntp: bool = False  # auxiliary head that predicts the next move of the history (training only)
+    oracle_head: bool = False  # auxiliary 4-hand level-invariant residual value head for subgame search
     # perfect-information value network (training only): the state input also holds the other
     # three hands (HIDDEN_DIM bits appended to the state); see make_oracle and train.py --oracle
     oracle: bool = False
@@ -94,6 +95,20 @@ class HistTransformer(nn.Module):
         return y[:, -1], y[:, :-1]
 
 
+class OracleValueHead(nn.Module):
+    """4-hand level-invariant residual evaluator attached to a frozen playing network for
+    short-horizon opening/early-mid subgame search (`FastNet.eval_oracle`)."""
+
+    def __init__(self, z_dim: int, h1: int = 512, h2: int = 256):
+        super().__init__()
+        in_dim = 122 + 408 + z_dim + ACTION_DIM + 1
+        self.fc0 = nn.Linear(in_dim, h1)
+        self.ln0 = nn.LayerNorm(h1)
+        self.fc1 = nn.Linear(h1, h2)
+        self.ln1 = nn.LayerNorm(h2)
+        self.fc2 = nn.Linear(h2, 1)
+
+
 class GuandanNet(nn.Module):
     def __init__(self, cfg: ModelConfig | None = None):
         super().__init__()
@@ -114,6 +129,8 @@ class GuandanNet(nn.Module):
             self.belief = nn.Linear(h, HIDDEN_DIM)
         if cfg.ntp:
             self.ntp = nn.Linear(hd, HIST_DIM)
+        if cfg.oracle_head:
+            self.oracle_head = OracleValueHead(h)
 
     def add_belief_head(self):
         """Add the auxiliary hidden-hand head to a model trained without it."""
@@ -171,9 +188,9 @@ def make_oracle(model: "GuandanNet") -> "GuandanNet":
     """Perfect-information copy of `model`: the state input gets HIDDEN_DIM more bits (the
     other hands, appended after the state) whose weights start at zero, so that the oracle
     starts out with exactly the values of `model` and learns to use the hidden cards."""
-    cfg = ModelConfig(**{**model.cfg.to_dict(), "oracle": True, "belief": False, "ntp": False})
+    cfg = ModelConfig(**{**model.cfg.to_dict(), "oracle": True, "belief": False, "ntp": False, "oracle_head": False})
     o = GuandanNet(cfg)
-    src = {k: v for k, v in model.state_dict().items() if not k.startswith(("belief.", "ntp."))}
+    src = {k: v for k, v in model.state_dict().items() if not k.startswith(("belief.", "ntp.", "oracle_head."))}
     w = src["state_mlp.0.weight"]  # [h, STATE_DIM + lstm]
     z = torch.zeros(w.shape[0], HIDDEN_DIM, dtype=w.dtype)
     src["state_mlp.0.weight"] = torch.cat([w[:, :STATE_DIM], z, w[:, STATE_DIM:]], dim=1)
